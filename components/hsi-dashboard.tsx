@@ -4,8 +4,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  LabelList,
-  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -15,9 +13,11 @@ import {
 } from "recharts";
 import {
   Activity,
+  ArrowUpRight,
   Database,
   Download,
   FileSpreadsheet,
+  Gauge,
   Home,
   LogOut,
   Save,
@@ -25,6 +25,7 @@ import {
   Target,
   Trash2,
   Undo2,
+  TrendingUp,
   Upload,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -767,379 +768,183 @@ function MetricCard({
   );
 }
 
-function shortPeriodLabel(periodLabel: string) {
-  const [name, year] = periodLabel.split(" ");
-  const idx = monthNames.indexOf(name);
-  const short = idx >= 0 ? shortMonthNames[idx] : (name ?? "").slice(0, 4);
-  return `${short} ${year ?? ""}`.trim();
-}
-
-function shortageValue(row: { targetFm: number; mtd: number }) {
-  return Math.max(0, row.targetFm - row.mtd);
-}
-
-function safeAchievement(realized: number, target: number): number | null {
-  return target === 0 ? null : realized / target;
-}
-
-const OWN_WITEL_LABEL = "YOGYA JATENG SELATAN";
-
-function InlineStat({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "good" | "warn" }) {
-  const valueClass = tone === "good" ? "text-emerald-700" : tone === "warn" ? "text-amber-700" : "text-slate-950";
-  return (
-    <div className="min-w-[7.5rem] flex-1">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-1 text-base font-semibold ${valueClass}`}>{value}</p>
-    </div>
-  );
-}
-
-function TeldaTable({ rows, teldaFilter }: { rows: ReportRow[]; teldaFilter: string }) {
-  const visibleRows = teldaFilter === "ALL" ? rows : rows.filter((row) => row.label === teldaFilter);
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[720px] border-collapse text-sm">
-        <thead>
-          <tr className="border-b border-slate-200 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-            <th className="py-2 pr-3">TELDA</th>
-            <th className="py-2 pr-3 text-right">TARGET</th>
-            <th className="py-2 pr-3 text-right">REALISASI</th>
-            <th className="py-2 pr-3 text-right">ACHIEVEMENT</th>
-            <th className="py-2 pr-3 text-right">SHORTAGE</th>
-            <th className="py-2 pr-3 text-right">GROWTH</th>
-            <th className="py-2 pr-3 text-right">RANKING</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {visibleRows.map((row) => (
-            <tr key={row.label} className={teldaFilter === row.label ? "bg-rose-50/70" : undefined}>
-              <td className="py-2 pr-3 font-medium text-slate-800">{row.label}</td>
-              <td className="py-2 pr-3 text-right text-slate-700">{formatNumber(row.targetFm)}</td>
-              <td className="py-2 pr-3 text-right text-slate-700">{formatNumber(row.mtd)}</td>
-              <td className="py-2 pr-3 text-right font-semibold text-rose-700">{formatPercent(row.targetAch)}</td>
-              <td className="py-2 pr-3 text-right text-amber-700">{formatNumber(shortageValue(row))}</td>
-              <td className="py-2 pr-3 text-right text-slate-700">{row.growthMtd === null ? "-" : formatPercent(row.growthMtd)}</td>
-              <td className="py-2 pr-3 text-right font-semibold text-slate-950">{row.rankAch ?? "-"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 function DashboardHome({ report }: { report: ComputedReport }) {
-  const [rkapStf, setRkapStf] = useState<"RKAP" | "STF">("RKAP");
-  const [teldaFilter, setTeldaFilter] = useState<string>("ALL");
-
-  const regionalRkap = report.witel;
-  const regionalStf = report.targetStf.witel;
-  const regionalSource = rkapStf === "RKAP" ? regionalRkap : regionalStf;
-
-  const teldaRkap = report.branch;
-  const teldaStf = report.targetStf.branch;
-  const teldaSource = rkapStf === "RKAP" ? teldaRkap : teldaStf;
-
-  const witelOwnRkap = regionalRkap.rows.find((row) => row.label === OWN_WITEL_LABEL) ?? regionalRkap.total;
-  const witelOwnStf = regionalStf.rows.find((row) => row.label === OWN_WITEL_LABEL) ?? regionalStf.total;
-
+  const ranking = [...report.witel.rows].sort((a, b) => (a.rankAch ?? 999) - (b.rankAch ?? 999));
+  const topBranch = ranking[0];
+  const stfTotal = report.targetStf.witel.total;
   const latestDay = latestPopulatedDay([report.witel, report.branch]);
-  const periodShort = shortPeriodLabel(report.periodLabel);
-
-  const targetChart = regionalRkap.rows.map((row) => {
-    const stfRow = regionalStf.rows.find((item) => item.label === row.label);
-    const activeTarget = rkapStf === "RKAP" ? row.targetFm : stfRow?.targetFm ?? 0;
-    const activeMtd = rkapStf === "RKAP" ? row.mtd : stfRow?.mtd ?? 0;
-    const activeAch = rkapStf === "RKAP" ? row.targetAch : stfRow?.targetAch ?? null;
-    return {
-      name: row.label.replace(" JATENG ", " "),
-      target: activeTarget,
-      realisasi: activeMtd,
-      shortage: Math.max(0, activeTarget - activeMtd),
-      achievement: activeAch === null ? 0 : Number((activeAch * 100).toFixed(1)),
-    };
-  });
-
-  const rkapBarChart = teldaRkap.rows.map((row) => ({
-    name: row.label,
+  const periodProgress = Math.round((latestDay / Math.max(report.dailyTrend.length, 1)) * 100);
+  const targetChart = report.witel.rows.map((row) => ({
+    name: row.label.replace(" JATENG ", " "),
     target: row.targetFm,
+    targetStf: report.targetStf.witel.rows.find((item) => item.label === row.label)?.targetFm ?? 0,
     realisasi: row.mtd,
-    achievement: row.targetAch === null ? 0 : Number((row.targetAch * 100).toFixed(1)),
-    rank: row.rankAch,
   }));
-  const stfBarChart = teldaStf.rows.map((row) => ({
-    name: row.label,
-    target: row.targetFm,
-    realisasi: row.mtd,
-    achievement: row.targetAch === null ? 0 : Number((row.targetAch * 100).toFixed(1)),
-    rank: row.rankAch,
+  const achievementChart = report.witel.rows.map((row) => ({
+    name: row.label.replace(" JATENG ", " "),
+    rkap: Number(((row.targetAch ?? 0) * 100).toFixed(2)),
+    stf: Number((((report.targetStf.witel.rows.find((item) => item.label === row.label)?.targetAch ?? 0) as number) * 100).toFixed(2)),
   }));
-
-  const trendTotal = rkapStf === "RKAP" ? report.witel.total : report.targetStf.witel.total;
-  const trendDayCount = trendTotal.days.length;
-  const dailyTargetValue = trendDayCount > 0 ? trendTotal.targetFm / trendDayCount : 0;
-  let runningCumulative = 0;
-  const trendData = trendTotal.days.map((value, index) => {
-    const realisasiHarian = value ?? 0;
-    runningCumulative += realisasiHarian;
-    return {
-      day: index + 1,
-      realisasiHarian,
-      targetHarian: dailyTargetValue,
-      cumulative: runningCumulative,
-    };
-  });
-
-  const cardWitelRow = teldaFilter === "ALL" ? teldaRkap.total : teldaRkap.rows.find((row) => row.label === teldaFilter) ?? teldaRkap.total;
-  const cardStfRow = teldaFilter === "ALL" ? teldaStf.total : teldaStf.rows.find((row) => row.label === teldaFilter) ?? teldaStf.total;
-  const cardTitle =
-    teldaFilter === "ALL" ? "HSI PERFORMA TELKOM JOGJA JATENG SELATAN" : `HSI PERFORMA TELDA ${teldaFilter}`;
 
   return (
     <div className="space-y-6">
-      {/* HEADER */}
       <section className={`${panelClass} overflow-hidden`}>
-        <div className="relative p-5 lg:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase text-rose-700">
-                <Activity className="h-4 w-4" />
-                PS HARIAN HSI
-              </p>
-              <h1 className="mt-2 text-2xl font-bold uppercase tracking-tight text-slate-950 sm:text-3xl">
-                HSI PERFORMA MTD {periodShort}
-              </h1>
-              <p className="mt-1 text-sm text-slate-500">Cut-off {report.cutoffLabel} · Source: {report.source}</p>
+        <div className="relative grid gap-6 bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_42%,#fff1f2_100%)] p-5 lg:grid-cols-[1.15fr_0.85fr] lg:p-6">
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(15,23,42,0.045)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.045)_1px,transparent_1px)] bg-[size:44px_44px] opacity-60" />
+          <div className="relative">
+            <div className="flex flex-wrap gap-2">
+              <StatusPill>{report.periodLabel}</StatusPill>
+              <StatusPill>Cut-off {report.cutoffLabel}</StatusPill>
+              <StatusPill tone={report.validation.mismatches === 0 ? "good" : "warn"}>
+                Validasi: {report.validation.mismatches === 0 ? "match" : `${report.validation.mismatches} selisih`}
+              </StatusPill>
             </div>
-            <StatusPill tone={report.validation.mismatches === 0 ? "good" : "warn"}>
-              Validasi: {report.validation.mismatches === 0 ? "match" : `${report.validation.mismatches} selisih`}
-            </StatusPill>
-          </div>
-
-          {/* FILTER BAR */}
-          <div className="mt-5 flex flex-wrap items-center gap-3 rounded-lg border border-slate-200/70 bg-white/70 p-3">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">HSI PERFORMANCE CURRENT MONTH {report.periodLabel.split(" ")[1]}</span>
-            <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
-              TELDA
-              <select
-                className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm font-medium text-slate-950 outline-none"
-                value={teldaFilter}
-                onChange={(event) => setTeldaFilter(event.target.value)}
-              >
-                <option value="ALL">SEMUA TELDA</option>
-                {teldaRkap.rows.map((row) => (
-                  <option key={row.label} value={row.label}>
-                    {row.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="inline-flex overflow-hidden rounded-md border border-slate-200">
-              <button
-                onClick={() => setRkapStf("RKAP")}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase transition ${rkapStf === "RKAP" ? "bg-slate-950 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
-              >
-                RKAP
-              </button>
-              <button
-                onClick={() => setRkapStf("STF")}
-                className={`px-3 py-1.5 text-xs font-semibold uppercase transition ${rkapStf === "STF" ? "bg-slate-950 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
-              >
-                STF
-              </button>
+            <p className="mt-6 inline-flex items-center gap-2 text-xs font-semibold uppercase text-rose-700">
+              <Activity className="h-4 w-4" />
+              PS Harian HSI
+            </p>
+            <h1 className="mt-2 max-w-4xl text-3xl font-semibold tracking-normal text-slate-950 sm:text-4xl">
+              Dashboard operasional {report.periodLabel}
+            </h1>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
+              Ringkasan performa dari data MASTER tersimpan, report RKAP, dan Target STF dengan histori harian yang tetap terjaga.
+            </p>
+            <div className="mt-6 grid max-w-3xl gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-white/70 bg-white/75 p-3 shadow-sm backdrop-blur">
+                <p className="text-xs font-semibold uppercase text-slate-500">Data Aktual</p>
+                <p className="mt-2 text-lg font-semibold text-slate-950">Tanggal {latestDay}</p>
+              </div>
+              <div className="rounded-lg border border-white/70 bg-white/75 p-3 shadow-sm backdrop-blur">
+                <p className="text-xs font-semibold uppercase text-slate-500">Progress Bulan</p>
+                <p className="mt-2 text-lg font-semibold text-slate-950">{periodProgress}%</p>
+              </div>
+              <div className="rounded-lg border border-white/70 bg-white/75 p-3 shadow-sm backdrop-blur">
+                <p className="text-xs font-semibold uppercase text-slate-500">Top WITEL</p>
+                <p className="mt-2 truncate text-lg font-semibold text-slate-950">{topBranch?.label ?? "-"}</p>
+              </div>
             </div>
-            <StatusPill>CURRENT MONTH: {report.periodLabel}</StatusPill>
+          </div>
+          <div className="relative rounded-lg border border-slate-800 bg-slate-950 p-5 text-white shadow-[0_30px_70px_-42px_rgba(15,23,42,0.95)]">
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-rose-300 to-transparent" />
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm font-medium text-slate-300">Total Realisasi MTD</p>
+              <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-200">
+                Live
+              </span>
+            </div>
+            <p className="mt-4 text-5xl font-semibold tracking-normal text-white">{formatNumber(report.witel.total.mtd)}</p>
+            <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-400" style={{ width: `${Math.min(periodProgress, 100)}%` }} />
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+                <p className="text-slate-400">Ach RKAP</p>
+                <p className="mt-1 font-semibold text-white">{formatPercent(report.witel.total.targetAch)}</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+                <p className="text-slate-400">Ach STF</p>
+                <p className="mt-1 font-semibold text-white">{formatPercent(stfTotal.targetAch)}</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+                <p className="text-slate-400">Shortage STF</p>
+                <p className="mt-1 font-semibold text-amber-200">{formatNumber(stfTotal.shortageFm)}</p>
+              </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
+                <p className="text-slate-400">Source</p>
+                <p className="mt-1 font-semibold text-white">Xpro</p>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* MTD SECTION */}
-      <section className={`${panelClass} p-5`}>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">HSI PERFORMA MTD {periodShort}</h2>
-          <StatusPill>Tanggal data {latestDay}</StatusPill>
-        </div>
-        <div className="flex flex-wrap gap-6">
-          <InlineStat label="Target" value={formatNumber(regionalSource.total.targetFm)} />
-          <InlineStat label="Realisasi MTD" value={formatNumber(regionalSource.total.mtd)} tone="good" />
-          <InlineStat label="Shortage" value={formatNumber(shortageValue(regionalSource.total))} tone="warn" />
-          <InlineStat label="Achievement" value={formatPercent(regionalSource.total.targetAch)} tone="good" />
-          <InlineStat label="Growth vs Bulan Lalu" value={regionalSource.total.growthMtd === null ? "-" : formatPercent(regionalSource.total.growthMtd)} />
-        </div>
-      </section>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <MetricCard label="Target FM RKAP" value={formatNumber(report.witel.total.targetFm)} detail="Baseline report sementara" icon={Target} />
+        <MetricCard label="Target FM STF" value={formatNumber(stfTotal.targetFm)} detail="Baseline target STF" icon={Gauge} />
+        <MetricCard label="Realisasi MTD" value={formatNumber(report.witel.total.mtd)} detail={`Update ${report.cutoffLabel}`} tone="good" icon={TrendingUp} />
+        <MetricCard label="Ach RKAP" value={formatPercent(report.witel.total.targetAch)} detail="Realisasi / Target RKAP" icon={ArrowUpRight} />
+        <MetricCard label="Ach STF" value={formatPercent(stfTotal.targetAch)} detail="Realisasi / Target STF" icon={ArrowUpRight} />
+        <MetricCard label="Shortage STF" value={formatNumber(stfTotal.shortageFm)} detail="Sisa menuju target STF" tone="warn" icon={FileSpreadsheet} />
+      </div>
 
-      {/* YTD SECTION */}
-      <section className={`${panelClass} p-5`}>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">HSI PERFORMA YTD {periodShort}</h2>
-          <StatusPill>Kumulatif Januari - {periodShort}</StatusPill>
-        </div>
-        <div className="flex flex-wrap gap-6">
-          <InlineStat label="Target YTD" value={formatNumber(regionalSource.total.targetYtd)} />
-          <InlineStat label="Realisasi YTD" value={formatNumber(regionalSource.total.realYtd)} tone="good" />
-          <InlineStat label="Shortage YTD" value={formatNumber(Math.max(0, regionalSource.total.targetYtd - regionalSource.total.realYtd))} tone="warn" />
-          <InlineStat label="Achievement YTD" value={formatPercent(regionalSource.total.achYtd)} tone="good" />
-          <InlineStat label="Growth YTD" value={regionalSource.total.growthYtd === null ? "-" : formatPercent(regionalSource.total.growthYtd)} />
-        </div>
-      </section>
-
-      {/* TARGET VS REALISASI */}
-      <section className={`${panelClass} p-5`}>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">Target vs Realisasi ({rkapStf})</h2>
-          <StatusPill>{report.periodLabel}</StatusPill>
-        </div>
-        <div className="h-[360px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={targetChart} margin={{ left: 0, right: 16, top: 24, bottom: 36 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-              <XAxis dataKey="name" angle={-28} textAnchor="end" interval={0} height={80} tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} />
-              <Legend verticalAlign="top" height={28} />
-              <Bar dataKey="target" name="Target" fill="#94a3b8" radius={[4, 4, 0, 0]}>
-                <LabelList dataKey="target" position="top" formatter={(value: unknown) => formatNumber(Number(value))} style={{ fontSize: 10, fill: "#475569" }} />
-              </Bar>
-              <Bar dataKey="realisasi" name="Realisasi" fill="#f97316" radius={[4, 4, 0, 0]}>
-                <LabelList dataKey="realisasi" position="top" formatter={(value: unknown) => formatNumber(Number(value))} style={{ fontSize: 10, fill: "#c2410c" }} />
-              </Bar>
-              <Bar dataKey="shortage" name="Shortage" fill="#f43f5e" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-slate-600">
-          <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-slate-400" /> Abu-abu = Target</span>
-          <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-orange-500" /> Oranye = Realisasi</span>
-          <span className="inline-flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded-sm bg-rose-500" /> Merah = Shortage</span>
-          <span className="text-slate-400">Regional: BALI · JTT · JTB · NUSRA · SCU · SJT · SURAMADU · JJS</span>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-4 border-t border-slate-100 pt-3 text-sm">
-          {targetChart.map((item) => (
-            <span key={item.name} className="text-slate-600">
-              <span className="font-semibold text-slate-900">{item.name}</span>: ACH {item.achievement.toFixed(1)}%
-            </span>
-          ))}
-        </div>
-      </section>
-
-      {/* CARD KANAN - HSI PERFORMANCE */}
-      <section className={`${panelClass} p-5`}>
-        <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">{cardTitle}</h2>
-        <div className="mt-4 flex flex-wrap items-center gap-x-10 gap-y-4">
-          <InlineStat label="Achievement RKAP" value={formatPercent(cardWitelRow.targetAch)} tone="good" />
-          <InlineStat label="Shortage STF" value={formatNumber(shortageValue(cardStfRow))} tone="warn" />
-        </div>
-        <p className="mt-4 text-xs text-slate-400">Source: {report.source}</p>
-      </section>
-
-      {/* PERFORMANCE BY RKAP 2026 (card kecil bawah) */}
-      <section className={`${panelClass} p-5`}>
-        <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">PERFORMANCE BY RKAP {report.periodLabel.split(" ")[1]}</h2>
-        <div className="mt-4 flex flex-wrap gap-x-10 gap-y-4">
-          <InlineStat label="Target RKAP" value={formatNumber(teldaRkap.total.targetFm)} />
-          <InlineStat label="Realisasi MTD" value={formatNumber(teldaRkap.total.mtd)} tone="good" />
-          <InlineStat label="Achievement RKAP" value={formatPercent(teldaRkap.total.targetAch)} tone="good" />
-          <InlineStat label="Current Month" value={report.periodLabel} />
-          <InlineStat label="Growth vs Last Month" value={teldaRkap.total.growthMtd === null ? "-" : formatPercent(teldaRkap.total.growthMtd)} />
-          <InlineStat label="Ranking" value={String(witelOwnRkap.rankAch ?? "-")} />
-        </div>
-      </section>
-
-      {/* DUA CHART UTAMA */}
-      <div className="grid gap-5 xl:grid-cols-2">
+      <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
         <section className={`${panelClass} p-5`}>
-          <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">PERFORMANCE BY RKAP {report.periodLabel.split(" ")[1]}</h2>
-          <div className="mt-4 h-[300px]">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-slate-950">Target vs Realisasi per WITEL</h2>
+            <StatusPill>{report.periodLabel}</StatusPill>
+          </div>
+          <div className="h-[340px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={rkapBarChart} margin={{ left: 0, right: 16, top: 20, bottom: 36 }}>
+              <BarChart data={targetChart} margin={{ left: 0, right: 16, top: 8, bottom: 36 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis dataKey="name" angle={-28} textAnchor="end" interval={0} height={70} tick={{ fontSize: 11 }} />
+                <XAxis dataKey="name" angle={-28} textAnchor="end" interval={0} height={80} tick={{ fontSize: 12 }} />
                 <YAxis tick={{ fontSize: 12 }} />
                 <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} />
-                <Legend verticalAlign="top" height={24} />
-                <Bar dataKey="target" name="Target RKAP" fill="#94a3b8" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="realisasi" name="Realisasi" fill="#0f766e" radius={[4, 4, 0, 0]}>
-                  <LabelList dataKey="achievement" position="top" formatter={(value: unknown) => `${Number(value).toFixed(0)}%`} style={{ fontSize: 10, fill: "#0f766e" }} />
-                </Bar>
+                <Bar dataKey="target" name="Target RKAP" fill="#64748b" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="targetStf" name="Target STF" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="realisasi" fill="#be123c" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-slate-100 pt-3 text-xs text-slate-600">
-            {[...rkapBarChart].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999)).map((item) => (
-              <span key={item.name}>#{item.rank} {item.name}</span>
+        </section>
+
+        <section className={`${panelClass} p-5`}>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-slate-950">Ranking Achievement</h2>
+            <ShieldCheck className="h-5 w-5 text-emerald-600" />
+          </div>
+          <div className="mt-4 divide-y divide-slate-100">
+            {ranking.map((row) => (
+              <div key={row.label} className="grid grid-cols-[40px_1fr_auto] items-center gap-3 py-3 text-sm">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-950 font-semibold text-white shadow-sm">
+                  {row.rankAch}
+                </span>
+                <div className="min-w-0">
+                  <span className="font-medium text-slate-800">{row.label}</span>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-gradient-to-r from-rose-500 to-emerald-500" style={{ width: `${Math.min((row.targetAch ?? 0) * 100, 100)}%` }} />
+                  </div>
+                </div>
+                <span className="font-semibold text-rose-700">{formatPercent(row.targetAch)}</span>
+              </div>
             ))}
           </div>
         </section>
+      </div>
 
+      <div className="grid gap-5 xl:grid-cols-2">
         <section className={`${panelClass} p-5`}>
-          <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">PERFORMANCE BY STF {report.periodLabel.split(" ")[1]}</h2>
+          <h2 className="text-lg font-semibold text-slate-950">Achievement RKAP vs STF</h2>
           <div className="mt-4 h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stfBarChart} margin={{ left: 0, right: 16, top: 20, bottom: 36 }}>
+              <BarChart data={achievementChart} margin={{ left: 0, right: 16, top: 8, bottom: 36 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis dataKey="name" angle={-28} textAnchor="end" interval={0} height={70} tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} />
-                <Legend verticalAlign="top" height={24} />
-                <Bar dataKey="target" name="Target STF" fill="#94a3b8" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="realisasi" name="Realisasi" fill="#f59e0b" radius={[4, 4, 0, 0]}>
-                  <LabelList dataKey="achievement" position="top" formatter={(value: unknown) => `${Number(value).toFixed(0)}%`} style={{ fontSize: 10, fill: "#b45309" }} />
-                </Bar>
+                <XAxis dataKey="name" angle={-28} textAnchor="end" interval={0} height={78} tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} unit="%" />
+                <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipPercent(value)} />
+                <Bar dataKey="rkap" name="Ach RKAP" fill="#0f766e" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="stf" name="Ach STF" fill="#f59e0b" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-400">Filter mengikuti RKAP apabila data STF per TELDA tidak tersedia.</p>
+        </section>
+
+        <section className={`${panelClass} p-5`}>
+          <h2 className="text-lg font-semibold text-slate-950">Tren Realisasi Harian</h2>
+          <div className="mt-4 h-[300px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={report.dailyTrend} margin={{ left: 0, right: 16, top: 8, bottom: 8 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                <XAxis dataKey="day" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 12 }} />
+                <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} labelFormatter={(day) => `Tanggal ${day}`} />
+                <Line type="monotone" dataKey="realisasi" stroke="#be123c" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="cumulative" stroke="#0f766e" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         </section>
       </div>
-
-      {/* TREND HARIAN */}
-      <section className={`${panelClass} p-5`}>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">Trend Target Harian vs Realisasi Harian ({rkapStf})</h2>
-          <StatusPill>Achievement: {formatPercent(safeAchievement(runningCumulative, trendTotal.targetFm))}</StatusPill>
-        </div>
-        <div className="mb-3 flex flex-wrap gap-6 text-sm">
-          <InlineStat label="Target Harian" value={formatNumber(dailyTargetValue)} />
-          <InlineStat label="Realisasi MTD" value={formatNumber(runningCumulative)} tone="good" />
-        </div>
-        <div className="h-[300px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={trendData} margin={{ left: 0, right: 16, top: 8, bottom: 8 }}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-              <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} labelFormatter={(day) => `Tanggal ${day}`} />
-              <Legend verticalAlign="top" height={24} />
-              <Line type="monotone" dataKey="targetHarian" name="Target Harian" stroke="#64748b" strokeWidth={2} strokeDasharray="5 4" dot={false} />
-              <Line type="monotone" dataKey="realisasiHarian" name="Realisasi Harian" stroke="#be123c" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </section>
-
-      {/* WITEL PERFORMANCE */}
-      <section className={`${panelClass} p-5`}>
-        <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">WITEL Performance - {OWN_WITEL_LABEL}</h2>
-        <div className="mt-4 flex flex-wrap gap-x-8 gap-y-4">
-          <InlineStat label="Target" value={formatNumber(rkapStf === "RKAP" ? witelOwnRkap.targetFm : witelOwnStf.targetFm)} />
-          <InlineStat label="Realisasi" value={formatNumber(rkapStf === "RKAP" ? witelOwnRkap.mtd : witelOwnStf.mtd)} tone="good" />
-          <InlineStat label="Achievement" value={formatPercent(rkapStf === "RKAP" ? witelOwnRkap.targetAch : witelOwnStf.targetAch)} tone="good" />
-          <InlineStat label="Shortage" value={formatNumber(shortageValue(rkapStf === "RKAP" ? witelOwnRkap : witelOwnStf))} tone="warn" />
-          <InlineStat label="Growth" value={(rkapStf === "RKAP" ? witelOwnRkap.growthMtd : witelOwnStf.growthMtd) === null ? "-" : formatPercent(rkapStf === "RKAP" ? witelOwnRkap.growthMtd : witelOwnStf.growthMtd)} />
-          <InlineStat label="Ranking" value={String((rkapStf === "RKAP" ? witelOwnRkap.rankAch : witelOwnStf.rankAch) ?? "-")} />
-          <InlineStat label="MTD" value={formatNumber(rkapStf === "RKAP" ? witelOwnRkap.mtd : witelOwnStf.mtd)} />
-          <InlineStat label="YTD" value={formatNumber(rkapStf === "RKAP" ? witelOwnRkap.realYtd : witelOwnStf.realYtd)} />
-        </div>
-      </section>
-
-      {/* TELDA PERFORMANCE */}
-      <section className={`${panelClass} p-5`}>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-bold uppercase tracking-tight text-slate-950">TELDA Performance ({rkapStf})</h2>
-          <StatusPill>{teldaFilter === "ALL" ? "Semua TELDA" : teldaFilter}</StatusPill>
-        </div>
-        <TeldaTable rows={teldaSource.rows} teldaFilter={teldaFilter} />
-      </section>
     </div>
   );
 }
