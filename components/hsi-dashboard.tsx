@@ -998,10 +998,10 @@ function DashboardHome({ report }: { report: ComputedReport }) {
               <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} />
               <Legend verticalAlign="top" height={28} />
               <Bar dataKey="target" name="Target" fill="#94a3b8" radius={[4, 4, 0, 0]}>
-                <LabelList dataKey="target" position="top" formatter={(value: number) => formatNumber(value)} style={{ fontSize: 10, fill: "#475569" }} />
+                <LabelList dataKey="target" position="top" formatter={(value: unknown) => formatNumber(Number(value))} style={{ fontSize: 10, fill: "#475569" }} />
               </Bar>
               <Bar dataKey="realisasi" name="Realisasi" fill="#f97316" radius={[4, 4, 0, 0]}>
-                <LabelList dataKey="realisasi" position="top" formatter={(value: number) => formatNumber(value)} style={{ fontSize: 10, fill: "#c2410c" }} />
+                <LabelList dataKey="realisasi" position="top" formatter={(value: unknown) => formatNumber(Number(value))} style={{ fontSize: 10, fill: "#c2410c" }} />
               </Bar>
               <Bar dataKey="shortage" name="Shortage" fill="#f43f5e" radius={[4, 4, 0, 0]} />
             </BarChart>
@@ -1059,7 +1059,7 @@ function DashboardHome({ report }: { report: ComputedReport }) {
                 <Legend verticalAlign="top" height={24} />
                 <Bar dataKey="target" name="Target RKAP" fill="#94a3b8" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="realisasi" name="Realisasi" fill="#0f766e" radius={[4, 4, 0, 0]}>
-                  <LabelList dataKey="achievement" position="top" formatter={(value: number) => `${value.toFixed(0)}%`} style={{ fontSize: 10, fill: "#0f766e" }} />
+                  <LabelList dataKey="achievement" position="top" formatter={(value: unknown) => `${Number(value).toFixed(0)}%`} style={{ fontSize: 10, fill: "#0f766e" }} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
@@ -1083,7 +1083,7 @@ function DashboardHome({ report }: { report: ComputedReport }) {
                 <Legend verticalAlign="top" height={24} />
                 <Bar dataKey="target" name="Target STF" fill="#94a3b8" radius={[4, 4, 0, 0]} />
                 <Bar dataKey="realisasi" name="Realisasi" fill="#f59e0b" radius={[4, 4, 0, 0]}>
-                  <LabelList dataKey="achievement" position="top" formatter={(value: number) => `${value.toFixed(0)}%`} style={{ fontSize: 10, fill: "#b45309" }} />
+                  <LabelList dataKey="achievement" position="top" formatter={(value: unknown) => `${Number(value).toFixed(0)}%`} style={{ fontSize: 10, fill: "#b45309" }} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
