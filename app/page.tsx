@@ -1,5 +1,5 @@
-import { HsiDashboard } from "@/components/hsi-dashboard";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return <HsiDashboard />;
+  redirect("/portal");
 }

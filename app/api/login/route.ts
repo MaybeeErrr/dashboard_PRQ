@@ -3,9 +3,8 @@ import {
   createSessionToken,
   credentialsConfigured,
   SESSION_COOKIE,
-  SESSION_MAX_AGE_SECONDS,
   validateCredentials,
-} from "@/lib/auth-session";
+} from "@/features/hsi/backend/auth/session";
 
 type LoginPayload = {
   password: string;
@@ -15,7 +14,7 @@ type LoginPayload = {
 };
 
 function safeReturnTo(value: string | null | undefined) {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/portal";
   return value;
 }
 
@@ -81,10 +80,9 @@ export async function POST(request: NextRequest) {
 
   const response = payload.wantsJson
     ? NextResponse.json({ ok: true })
-    : NextResponse.redirect(new URL(payload.returnTo, getRequestOrigin(request)), 303);
+    : NextResponse.redirect(new URL("/portal", getRequestOrigin(request)), 303);
   response.cookies.set(SESSION_COOKIE, await createSessionToken(payload.username), {
     httpOnly: true,
-    maxAge: SESSION_MAX_AGE_SECONDS,
     path: "/",
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",

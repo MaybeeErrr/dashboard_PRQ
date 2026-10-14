@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
+import { SessionTabGuard } from "@/features/shared/dashboard/session-tab-guard";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Reporting HSI 2026",
-  description: "Dashboard, MASTER input, Report Sementara, and Report HSI Target STF SEPT for HSI reporting.",
+  title: "Reporting Portal",
+  description: "Integrated reporting portal for HSI, WMS, and LTS dashboards.",
   other: {
     "codex-preview": "development",
   },
@@ -20,7 +21,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="id">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <SessionTabGuard />
+        {children}
+      </body>
     </html>
   );
 }

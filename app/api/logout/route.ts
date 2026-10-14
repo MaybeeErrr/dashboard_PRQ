@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { SESSION_COOKIE } from "@/lib/auth-session";
+import { SESSION_COOKIE } from "@/features/hsi/backend/auth/session";
 
 export async function POST() {
   const response = NextResponse.json({ ok: true });

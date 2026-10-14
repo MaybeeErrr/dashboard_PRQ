@@ -317,6 +317,75 @@ function referenceMtd(label: string, kind: ReferenceKind) {
   return toNumber((source.find((row) => row.label === label)?.mtd ?? 0) as CellValue);
 }
 
+function hasPreviousValue(source: Record<string, CellValue>, label: string) {
+  return Object.prototype.hasOwnProperty.call(source, label) && source[label] !== null && source[label] !== "";
+}
+
+function previousValueOrMemberSum(
+  source: Record<string, CellValue>,
+  label: string,
+  memberRows: ReportRow[],
+  selector: (row: ReportRow) => number,
+) {
+  if (hasPreviousValue(source, label)) return toNumber(source[label]);
+  return memberRows.reduce((sum, row) => sum + selector(row), 0);
+}
+
+function previousYtdPrevOrMemberSum(source: Record<string, CellValue>, label: string, members: string[]) {
+  if (hasPreviousValue(source, label)) return toNumber(source[label]);
+  return members.reduce((sum, member) => sum + toNumber(source[member]), 0);
+}
+
+function makeGroupedBranchRow(
+  group: (typeof seedData.branchGroups)[number],
+  memberRows: ReportRow[],
+  referenceKind: "branch" | "stfBranch",
+  period: ReportingPeriod,
+) {
+  const daysRaw = sumDayArrays(memberRows.map((row) => row.days.map((day) => day ?? 0)), period.days);
+  const target: TargetConfig = {
+    label: group.label,
+    monthly: Array.from({ length: 12 }, (_, month) =>
+      memberRows.reduce((sum, row) => sum + (month === period.monthIndex ? row.targetFm : 0), 0),
+    ),
+    targetYtd: memberRows.reduce((sum, row) => sum + row.targetYtd, 0),
+  };
+  const previous: PreviousConfig = {
+    mtd: {
+      [group.label]: previousValueOrMemberSum(
+        seedData.previousByBranch.mtd as Record<string, CellValue>,
+        group.label,
+        memberRows,
+        (row) => row.realMtdPrev,
+      ),
+    },
+    fm: {
+      [group.label]: previousValueOrMemberSum(
+        seedData.previousByBranch.fm as Record<string, CellValue>,
+        group.label,
+        memberRows,
+        (row) => row.realFmPrev,
+      ),
+    },
+    ytd: {
+      [group.label]: previousValueOrMemberSum(
+        seedData.previousByBranch.ytd as Record<string, CellValue>,
+        group.label,
+        memberRows,
+        (row) => row.realYtd,
+      ),
+    },
+    ytdPrev: {
+      [group.label]: previousYtdPrevOrMemberSum(
+        seedData.previousByBranch.ytdPrev as Record<string, CellValue>,
+        group.label,
+        group.members,
+      ),
+    },
+  };
+  return makeRow(group.label, target, daysRaw, previous, referenceMtd(group.label, referenceKind), period.monthIndex);
+}
+
 function validation(rows: ReportRow[], kind: ReferenceKind) {
   const reference = seedData.excelReference[kind];
   const notes: string[] = [];
@@ -362,31 +431,7 @@ function makeBranchRows(
 
   const rows = seedData.branchGroups.map((group) => {
     const memberRows = group.members.map((member) => teldaRows.get(member)).filter(Boolean) as ReportRow[];
-    const daysRaw = sumDayArrays(memberRows.map((row) => row.days.map((day) => day ?? 0)), period.days);
-    const target: TargetConfig = {
-      label: group.label,
-      monthly: Array.from({ length: 12 }, (_, month) =>
-        memberRows.reduce((sum, row) => sum + (month === period.monthIndex ? row.targetFm : 0), 0),
-      ),
-      targetYtd: memberRows.reduce((sum, row) => sum + row.targetYtd, 0),
-    };
-    const previous: PreviousConfig = {
-      mtd: { [group.label]: memberRows.reduce((sum, row) => sum + row.realMtdPrev, 0) },
-      fm: { [group.label]: memberRows.reduce((sum, row) => sum + row.realFmPrev, 0) },
-      ytd: { [group.label]: memberRows.reduce((sum, row) => sum + row.realYtd, 0) },
-      ytdPrev: {
-        [group.label]: group.members.reduce(
-          (sum, member) => sum + toNumber((seedData.previousByBranch.ytdPrev as Record<string, CellValue>)[member]),
-          0,
-        ),
-      },
-    };
-    const row = makeRow(group.label, target, daysRaw, previous, referenceMtd(group.label, referenceKind), period.monthIndex);
-    row.realYtd = memberRows.reduce((sum, member) => sum + member.realYtd, 0);
-    row.achYtd = safeRatio(row.realYtd, row.targetYtd);
-    row.growthYtd = safeGrowth(row.realYtd, previous.ytdPrev[group.label] as number);
-    row.shortageYtd = row.realYtd - row.targetYtd;
-    return row;
+    return makeGroupedBranchRow(group, memberRows, referenceKind, period);
   });
   rankDescending(rows, "targetAch");
   rankDescending(rows, "achYtd");
@@ -428,31 +473,7 @@ export function computeReport(masterRows: MasterRow[], savedAt: string | null = 
 
   const branchRows = seedData.branchGroups.map((group) => {
     const memberRows = group.members.map((member) => teldaRows.get(member)).filter(Boolean) as ReportRow[];
-    const daysRaw = sumDayArrays(memberRows.map((row) => row.days.map((day) => day ?? 0)), period.days);
-    const target: TargetConfig = {
-      label: group.label,
-      monthly: Array.from({ length: 12 }, (_, month) =>
-        memberRows.reduce((sum, row) => sum + (month === period.monthIndex ? row.targetFm : 0), 0),
-      ),
-      targetYtd: memberRows.reduce((sum, row) => sum + row.targetYtd, 0),
-    };
-    const previous: PreviousConfig = {
-      mtd: { [group.label]: memberRows.reduce((sum, row) => sum + row.realMtdPrev, 0) },
-      fm: { [group.label]: memberRows.reduce((sum, row) => sum + row.realFmPrev, 0) },
-      ytd: { [group.label]: memberRows.reduce((sum, row) => sum + row.realYtd, 0) },
-      ytdPrev: {
-        [group.label]: group.members.reduce(
-          (sum, member) => sum + toNumber((seedData.previousByBranch.ytdPrev as Record<string, CellValue>)[member]),
-          0,
-        ),
-      },
-    };
-    const row = makeRow(group.label, target, daysRaw, previous, referenceMtd(group.label, "branch"), period.monthIndex);
-    row.realYtd = memberRows.reduce((sum, member) => sum + member.realYtd, 0);
-    row.achYtd = safeRatio(row.realYtd, row.targetYtd);
-    row.growthYtd = safeGrowth(row.realYtd, previous.ytdPrev[group.label] as number);
-    row.shortageYtd = row.realYtd - row.targetYtd;
-    return row;
+    return makeGroupedBranchRow(group, memberRows, "branch", period);
   });
   rankDescending(branchRows, "targetAch");
   rankDescending(branchRows, "achYtd");

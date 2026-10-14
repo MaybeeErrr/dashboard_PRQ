@@ -1,0 +1,15 @@
+.env
+.env.*
+.next
+.vinext
+.wrangler
+.sites-runtime
+.agents
+.codex
+.vercel
+dist
+node_modules
+outputs
+work
+coverage
+*.log

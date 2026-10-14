@@ -2,8 +2,10 @@
 
 import {
   Bar,
-  BarChart,
   CartesianGrid,
+  ComposedChart,
+  LabelList,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -13,13 +15,14 @@ import {
 } from "recharts";
 import {
   Activity,
+  ArrowLeft,
   ArrowUpRight,
   Database,
   Download,
   FileSpreadsheet,
   Gauge,
   Home,
-  LogOut,
+  LockKeyhole,
   Save,
   ShieldCheck,
   Target,
@@ -28,10 +31,18 @@ import {
   TrendingUp,
   Upload,
 } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { seedData } from "@/lib/seed-data";
+import { seedData } from "@/features/hsi/domain/reporting/seed-data";
+import type { DashboardPermissions } from "@/features/hsi/backend/auth/session";
+import { CompactRankingInsight } from "@/features/shared/dashboard/compact-ranking-insight";
+import { cutoffDateFromPeriodPart, dateRangeLabel as formatSharedDateRangeLabel, formatDataCutoff, formatDataCutoffDate, formatYtdLabel, getPeriodSemanticLabel } from "@/features/shared/dashboard/date-label";
+import { DashboardMetricCard, type DashboardMetricTone } from "@/features/shared/dashboard/metric-card";
+import { MasterUnlockModal } from "@/features/shared/dashboard/master-unlock-modal";
+import { DashboardPeriodFilter, defaultPeriodFilter, type DashboardPeriodFilterState } from "@/features/shared/dashboard/period-filter";
+import { DashboardStatusPill } from "@/features/shared/dashboard/status-pill";
 import {
   computeReport,
   initialMasterRows,
@@ -40,7 +51,7 @@ import {
   type MasterRow,
   type ReportRow,
   type ReportTable,
-} from "@/lib/reporting";
+} from "@/features/hsi/domain/reporting/reporting";
 
 const STORAGE_KEY = "hsi-master-rows-v1";
 const SAVED_AT_KEY = "hsi-master-saved-at-v1";
@@ -79,6 +90,14 @@ type SavedVersion = {
   savedAt: string | null;
 };
 type SaveSnapshots = Record<string, SavedVersion[]>;
+type DashboardPersistedState = {
+  dataVersion: string;
+  masterHeadersCleared: boolean;
+  periodArchive: PeriodArchive;
+  saveSnapshots: SaveSnapshots;
+  selectedPeriodKey: string;
+  updatedAt: string | null;
+};
 
 type SheetJsWorkbook = {
   SheetNames: string[];
@@ -100,12 +119,12 @@ declare global {
 const navItems: { id: View; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: "home", label: "Home", icon: Home },
   { id: "master", label: "MASTER", icon: Database },
-  { id: "report", label: "Report Sementara SEPT 2026", icon: FileSpreadsheet },
-  { id: "stf", label: "Report HSI Target STF SEPT", icon: Target },
+  { id: "report", label: "Report HSI Target RKAP", icon: FileSpreadsheet },
+  { id: "stf", label: "Report HSI Target STF", icon: Target },
 ];
 
 const panelClass =
-  "rounded-lg border border-white/70 bg-white/90 shadow-[0_18px_50px_-36px_rgba(15,23,42,0.55)] ring-1 ring-slate-950/[0.03] backdrop-blur";
+  "rounded-xl border border-white/15 bg-white shadow-[0_18px_44px_-30px_rgba(0,0,0,0.58)] ring-1 ring-slate-950/[0.04] transition-shadow duration-200";
 const primaryButtonClass =
   "inline-flex h-10 items-center gap-2 rounded-md bg-slate-950 px-4 text-sm font-semibold text-white shadow-[0_14px_28px_-18px_rgba(15,23,42,0.9)] transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300";
 const secondaryButtonClass =
@@ -299,17 +318,7 @@ async function readMasterRowsFromWorkbook(file: File) {
 }
 
 function StatusPill({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "neutral" | "good" | "warn" }) {
-  const toneClass =
-    tone === "good"
-      ? "border-emerald-200/80 bg-emerald-50/90 text-emerald-700"
-      : tone === "warn"
-        ? "border-amber-200/80 bg-amber-50/90 text-amber-800"
-        : "border-slate-200/80 bg-white/80 text-slate-600";
-  return (
-    <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold shadow-sm backdrop-blur ${toneClass}`}>
-      {children}
-    </span>
-  );
+  return <DashboardStatusPill tone={tone}>{children}</DashboardStatusPill>;
 }
 
 function formatJakartaDateTime(date: Date, seconds = true) {
@@ -382,6 +391,107 @@ function previousMonthLabelFromKey(periodKey: string) {
   const previousMonth = month <= 1 ? 12 : month - 1;
   const previousYear = month <= 1 ? year - 1 : year;
   return `${shortMonthNames[previousMonth - 1] ?? "AUG"} ${Number.isFinite(previousYear) ? previousYear : 2026}`;
+}
+
+function dateInputForPeriodKey(periodKey: string, day: "first" | "last") {
+  const year = Number(periodKey.slice(0, 4));
+  const month = Number(periodKey.slice(4, 6));
+  const date = day === "first" ? 1 : new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
+}
+
+function monthRangeKeys(startPeriodKey: string, endPeriodKey: string) {
+  const startYear = Number(startPeriodKey.slice(0, 4));
+  const startMonth = Number(startPeriodKey.slice(4, 6));
+  const endYear = Number(endPeriodKey.slice(0, 4));
+  const endMonth = Number(endPeriodKey.slice(4, 6));
+  if (!Number.isFinite(startYear) || !Number.isFinite(startMonth) || !Number.isFinite(endYear) || !Number.isFinite(endMonth)) return [];
+  const startIndex = startYear * 12 + startMonth - 1;
+  const endIndex = endYear * 12 + endMonth - 1;
+  if (startIndex > endIndex) return [];
+  return Array.from({ length: endIndex - startIndex + 1 }, (_, index) => {
+    const current = startIndex + index;
+    const year = Math.floor(current / 12);
+    const month = (current % 12) + 1;
+    return `${year}${String(month).padStart(2, "0")}`;
+  });
+}
+
+function dateRangeToMonthParts(startDate: string, endDate: string) {
+  const start = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return [];
+  const startKey = `${start.getFullYear()}${String(start.getMonth() + 1).padStart(2, "0")}`;
+  const endKey = `${end.getFullYear()}${String(end.getMonth() + 1).padStart(2, "0")}`;
+  return monthRangeKeys(startKey, endKey).map((periodKey) => {
+    const year = Number(periodKey.slice(0, 4));
+    const month = Number(periodKey.slice(4, 6));
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const startDay = periodKey === startKey ? start.getDate() : 1;
+    const endDay = periodKey === endKey ? end.getDate() : daysInMonth;
+    return {
+      endDay,
+      periodKey,
+      startDay,
+      weight: Math.max(0, endDay - startDay + 1) / Math.max(daysInMonth, 1),
+    };
+  });
+}
+
+function periodRangeLabel(startPeriodKey: string, endPeriodKey: string) {
+  if (startPeriodKey === endPeriodKey) return periodLabelFromKey(startPeriodKey);
+  const startYear = startPeriodKey.slice(0, 4);
+  const endYear = endPeriodKey.slice(0, 4);
+  const startMonth = monthNames[Number(startPeriodKey.slice(4, 6)) - 1] ?? startPeriodKey;
+  const endMonth = monthNames[Number(endPeriodKey.slice(4, 6)) - 1] ?? endPeriodKey;
+  return startYear === endYear ? `${startMonth} - ${endMonth} ${endYear}` : `${startMonth} ${startYear} - ${endMonth} ${endYear}`;
+}
+
+function dateRangeLabel(startDate: string, endDate: string) {
+  return formatSharedDateRangeLabel(startDate, endDate);
+}
+
+function normalizePeriodFilter(value: DashboardPeriodFilterState) {
+  if (value.mode === "current-month") {
+    return {
+      ...value,
+      endDate: dateInputForPeriodKey(value.startMonth, "last"),
+      endMonth: value.startMonth,
+      startDate: dateInputForPeriodKey(value.startMonth, "first"),
+    };
+  }
+  if (value.mode === "ytd") {
+    const year = value.endMonth.slice(0, 4);
+    return {
+      ...value,
+      endDate: dateInputForPeriodKey(value.endMonth, "last"),
+      startDate: `${year}-01-01`,
+      startMonth: `${year}01`,
+    };
+  }
+  if (value.mode === "monthly") {
+    return {
+      ...value,
+      endDate: dateInputForPeriodKey(value.endMonth, "last"),
+      startDate: dateInputForPeriodKey(value.startMonth, "first"),
+    };
+  }
+  const startMonth = value.startDate ? value.startDate.slice(0, 7).replace("-", "") : value.startMonth;
+  const endMonth = value.endDate ? value.endDate.slice(0, 7).replace("-", "") : value.endMonth;
+  return { ...value, endMonth, startMonth };
+}
+
+function validatePeriodFilter(value: DashboardPeriodFilterState) {
+  const normalized = normalizePeriodFilter(value);
+  if (normalized.mode === "date-range") {
+    if (!normalized.startDate || !normalized.endDate) return "Start date dan end date harus diisi.";
+    if (new Date(`${normalized.startDate}T00:00:00`) > new Date(`${normalized.endDate}T00:00:00`)) {
+      return "Start date must be before or equal to end date.";
+    }
+  } else if (normalized.startMonth > normalized.endMonth) {
+    return "Start period must be before or equal to end period.";
+  }
+  return null;
 }
 
 function formatSavedAt(value: string | null) {
@@ -524,6 +634,68 @@ function parseSaveSnapshots(value: string | null): SaveSnapshots {
   } catch {
     return {};
   }
+}
+
+function parsePersistedDashboardState(value: unknown): DashboardPersistedState | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<DashboardPersistedState>;
+  const selectedPeriodKey = parsePeriodKey(candidate.selectedPeriodKey);
+  if (!selectedPeriodKey) return null;
+  const periodArchive = parsePeriodArchive(JSON.stringify(candidate.periodArchive ?? {}));
+  if (!periodArchive[selectedPeriodKey]) return null;
+  return {
+    dataVersion: typeof candidate.dataVersion === "string" ? candidate.dataVersion : seedData.dataVersion,
+    masterHeadersCleared: Boolean(candidate.masterHeadersCleared),
+    periodArchive,
+    saveSnapshots: parseSaveSnapshots(JSON.stringify(candidate.saveSnapshots ?? {})),
+    selectedPeriodKey,
+    updatedAt: typeof candidate.updatedAt === "string" ? candidate.updatedAt : null,
+  };
+}
+
+function persistDashboardStateLocally(state: DashboardPersistedState) {
+  const activePeriod = state.periodArchive[state.selectedPeriodKey];
+  window.localStorage.setItem(PERIOD_ARCHIVE_KEY, JSON.stringify(state.periodArchive));
+  window.localStorage.setItem(SELECTED_PERIOD_KEY, state.selectedPeriodKey);
+  window.localStorage.setItem(DATA_VERSION_KEY, state.dataVersion);
+  window.localStorage.setItem(SAVE_SNAPSHOTS_KEY, JSON.stringify(state.saveSnapshots));
+  window.localStorage.setItem(MASTER_HEADERS_CLEARED_KEY, String(state.masterHeadersCleared));
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(activePeriod.rows));
+  if (activePeriod.savedAt) {
+    window.localStorage.setItem(SAVED_AT_KEY, activePeriod.savedAt);
+  } else {
+    window.localStorage.removeItem(SAVED_AT_KEY);
+  }
+  if (activePeriod.reportHistory) {
+    window.localStorage.setItem(REPORT_HISTORY_KEY, JSON.stringify(activePeriod.reportHistory));
+  } else {
+    window.localStorage.removeItem(REPORT_HISTORY_KEY);
+  }
+}
+
+async function loadDashboardStateFromServer(): Promise<{ configured: boolean; state: DashboardPersistedState | null }> {
+  const response = await fetch("/api/dashboard-state", { cache: "no-store" });
+  if (!response.ok) throw new Error("Gagal memuat data dari server.");
+  const payload = (await response.json()) as { configured?: boolean; state?: unknown };
+  return {
+    configured: Boolean(payload.configured),
+    state: parsePersistedDashboardState(payload.state),
+  };
+}
+
+async function saveDashboardStateToServer(state: DashboardPersistedState, masterUnlockToken: string | null): Promise<{ configured: boolean }> {
+  const response = await fetch("/api/dashboard-state", {
+    body: JSON.stringify(state),
+    headers: {
+      "Content-Type": "application/json",
+      ...(masterUnlockToken ? { "x-master-unlock-token": masterUnlockToken } : {}),
+    },
+    method: "PUT",
+  });
+  if (response.status === 503) return { configured: false };
+  if (!response.ok) throw new Error("Gagal menyimpan data ke server.");
+  const payload = (await response.json()) as { configured?: boolean };
+  return { configured: Boolean(payload.configured) };
 }
 
 function createPeriodEntry(
@@ -707,6 +879,219 @@ function applyReportHistory(report: ComputedReport, history: ReportHistory | nul
   };
 }
 
+type PeriodReportPart = {
+  endDay: number;
+  periodKey: string;
+  report: ComputedReport;
+  startDay: number;
+  weight: number;
+};
+
+function latestActualDateFromHsiParts(parts: PeriodReportPart[]) {
+  for (const part of [...parts].reverse()) {
+    const days = part.report.witel.total.days;
+    for (let day = part.endDay; day >= part.startDay; day -= 1) {
+      if (hasActualValue(days[day - 1])) {
+        return cutoffDateFromPeriodPart({ endDay: day, periodKey: part.periodKey });
+      }
+    }
+  }
+  const fallback = parts.at(-1);
+  return fallback ? cutoffDateFromPeriodPart(fallback) : new Date();
+}
+
+function rowSegment(row: ReportRow, startDay: number, endDay: number) {
+  const days = row.days.slice(startDay - 1, endDay);
+  const mtd = days.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  return { days, mtd };
+}
+
+function aggregateRows(
+  label: string,
+  rows: { row: ReportRow; startDay: number; endDay: number; weight: number }[],
+  ytdRows = rows,
+): ReportRow {
+  const base = rows[0]?.row;
+  const days = rows.flatMap((part) => rowSegment(part.row, part.startDay, part.endDay).days);
+  const mtd = rows.reduce((sum, part) => sum + rowSegment(part.row, part.startDay, part.endDay).mtd, 0);
+  const targetFm = rows.reduce((sum, part) => sum + part.row.targetFm * part.weight, 0);
+  const realYtd = ytdRows.reduce((sum, part) => sum + rowSegment(part.row, part.startDay, part.endDay).mtd, 0);
+  const targetYtd = ytdRows.reduce((sum, part) => sum + part.row.targetFm * part.weight, 0);
+  const realMtdPrev = rows.reduce((sum, part) => sum + part.row.realMtdPrev * part.weight, 0);
+  const realFmPrev = rows.reduce((sum, part) => sum + part.row.realFmPrev * part.weight, 0);
+  const previousYtd = ytdRows.reduce((sum, part) => {
+    const previous = previousFromGrowth(part.row.realYtd, part.row.growthYtd);
+    return sum + previous * part.weight;
+  }, 0);
+  return {
+    ...(base ?? {
+      achYtd: null,
+      days: [],
+      growthFm: null,
+      growthMtd: null,
+      growthYtd: null,
+      label,
+      mtd: 0,
+      rankAch: null,
+      rankYtd: null,
+      realFmPrev: 0,
+      realMtdPrev: 0,
+      realYtd: 0,
+      shortageFm: 0,
+      shortageYtd: 0,
+      targetAch: null,
+      targetFm: 0,
+      targetYtd: 0,
+    }),
+    achYtd: safeRatioValue(realYtd, targetYtd),
+    days,
+    growthFm: safeGrowthValue(mtd, realFmPrev),
+    growthMtd: safeGrowthValue(mtd, realMtdPrev),
+    growthYtd: safeGrowthValue(realYtd, previousYtd),
+    label,
+    mtd,
+    rankAch: null,
+    rankYtd: null,
+    realFmPrev,
+    realMtdPrev,
+    realYtd,
+    shortageFm: mtd - targetFm,
+    shortageYtd: realYtd - targetYtd,
+    targetAch: safeRatioValue(mtd, targetFm),
+    targetFm,
+    targetYtd,
+  };
+}
+
+function aggregateTable(
+  parts: PeriodReportPart[],
+  selectTable: (report: ComputedReport) => ReportTable,
+  ytdParts = parts,
+): ReportTable {
+  const firstTable = selectTable(parts[0].report);
+  const rows = firstTable.rows.map((row) =>
+    aggregateRows(
+      row.label,
+      parts.map((part) => ({
+        endDay: part.endDay,
+        row: selectTable(part.report).rows.find((candidate) => candidate.label === row.label) ?? row,
+        startDay: part.startDay,
+        weight: part.weight,
+      })),
+      ytdParts.map((part) => ({
+        endDay: part.endDay,
+        row: selectTable(part.report).rows.find((candidate) => candidate.label === row.label) ?? row,
+        startDay: part.startDay,
+        weight: part.weight,
+      })),
+    ),
+  );
+  const rankedRows = rankReportRows(rankReportRows(rows, "targetAch"), "achYtd");
+  return {
+    ...firstTable,
+    rows: rankedRows,
+    total: aggregateRows(
+      firstTable.total.label,
+      parts.map((part) => ({
+        endDay: part.endDay,
+        row: selectTable(part.report).total,
+        startDay: part.startDay,
+        weight: part.weight,
+      })),
+      ytdParts.map((part) => ({
+        endDay: part.endDay,
+        row: selectTable(part.report).total,
+        startDay: part.startDay,
+        weight: part.weight,
+      })),
+    ),
+  };
+}
+
+function reportForArchiveEntry(entry: PeriodArchiveEntry) {
+  return entry.reportSnapshot ?? applyReportHistory(computeReport(entry.rows, entry.savedAt, entry.periodKey), entry.reportHistory);
+}
+
+function reportForPeriodFilter(
+  baseReport: ComputedReport,
+  periodArchive: PeriodArchive,
+  selectedPeriodKey: string,
+  filter: DashboardPeriodFilterState,
+) {
+  const normalized = normalizePeriodFilter(filter);
+  const validationMessage = validatePeriodFilter(normalized);
+  if (validationMessage) return { report: baseReport, validationMessage };
+
+  const parts =
+    normalized.mode === "date-range"
+      ? dateRangeToMonthParts(normalized.startDate, normalized.endDate)
+      : monthRangeKeys(normalized.startMonth, normalized.endMonth).map((periodKey) => ({
+          endDay: new Date(Number(periodKey.slice(0, 4)), Number(periodKey.slice(4, 6)), 0).getDate(),
+          periodKey,
+          startDay: 1,
+          weight: 1,
+        }));
+
+  if (parts.length <= 1 && parts[0]?.periodKey === selectedPeriodKey && parts[0]?.startDay === 1 && parts[0]?.weight === 1) {
+    return { report: baseReport, validationMessage: null };
+  }
+
+  const reportParts = parts
+    .map((part) => {
+      const entry = periodArchive[part.periodKey];
+      if (!entry) return null;
+      return { ...part, report: reportForArchiveEntry(entry) };
+    })
+    .filter(Boolean) as PeriodReportPart[];
+
+  if (reportParts.length === 0) return { report: baseReport, validationMessage: "Data periode yang dipilih belum tersedia." };
+
+  const lastPart = reportParts[reportParts.length - 1];
+  const ytdStartDate = `${lastPart.periodKey.slice(0, 4)}-01-01`;
+  const ytdEndDate = `${lastPart.periodKey.slice(0, 4)}-${lastPart.periodKey.slice(4, 6)}-${String(lastPart.endDay).padStart(2, "0")}`;
+  const ytdParts = dateRangeToMonthParts(ytdStartDate, ytdEndDate)
+    .map((part) => {
+      const entry = periodArchive[part.periodKey];
+      if (!entry) return null;
+      return { ...part, report: reportForArchiveEntry(entry) };
+    })
+    .filter(Boolean) as PeriodReportPart[];
+  const effectiveYtdParts = ytdParts.length > 0 ? ytdParts : reportParts;
+
+  const witel = aggregateTable(reportParts, (report) => report.witel, effectiveYtdParts);
+  const branch = aggregateTable(reportParts, (report) => report.branch, effectiveYtdParts);
+  const stfWitel = aggregateTable(reportParts, (report) => report.targetStf.witel, effectiveYtdParts);
+  const stfBranch = aggregateTable(reportParts, (report) => report.targetStf.branch, effectiveYtdParts);
+  const dailyTrend = witel.total.days.map((value, index) => ({
+    cumulative: witel.total.days.slice(0, index + 1).reduce<number>((sum, dayValue) => sum + (dayValue ?? 0), 0),
+    day: index + 1,
+    realisasi: value ?? 0,
+  }));
+  const periodLabel =
+    normalized.mode === "date-range"
+      ? dateRangeLabel(normalized.startDate, normalized.endDate)
+      : periodRangeLabel(reportParts[0].periodKey, reportParts[reportParts.length - 1].periodKey);
+  const cutoffLabel = formatDataCutoffDate(latestActualDateFromHsiParts(reportParts));
+
+  return {
+    report: {
+      ...baseReport,
+      branch,
+      cutoffLabel,
+      dailyTrend,
+      periodLabel,
+      previousMonthLabel: baseReport.previousMonthLabel,
+      targetStf: {
+        branch: stfBranch,
+        witel: stfWitel,
+      },
+      validation: { checked: 0, mismatches: 0, notes: [] },
+      witel,
+    },
+    validationMessage: reportParts.length < parts.length ? "Sebagian data periode belum tersedia, hanya periode yang tersedia yang dihitung." : null,
+  };
+}
+
 function achievementTone(value: number | null) {
   if (value === null) return "neutral";
   if (value >= 1) return "good";
@@ -730,221 +1115,638 @@ function MetricCard({
   value,
   detail,
   tone = "neutral",
-  icon: Icon,
+  icon,
 }: {
   label: string;
   value: string;
   detail: string;
-  tone?: "neutral" | "good" | "warn";
+  tone?: DashboardMetricTone;
   icon?: React.ComponentType<{ className?: string }>;
 }) {
-  const toneClass =
-    tone === "good"
-      ? "from-emerald-50/90 to-white text-emerald-700"
-      : tone === "warn"
-        ? "from-amber-50/90 to-white text-amber-700"
-        : "from-slate-50/90 to-white text-slate-600";
-  const iconClass =
-    tone === "good"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-      : tone === "warn"
-        ? "border-amber-200 bg-amber-50 text-amber-700"
-        : "border-slate-200 bg-white text-slate-600";
   return (
-    <section className={`${panelClass} overflow-hidden bg-gradient-to-br ${toneClass} p-4 transition hover:-translate-y-0.5 hover:shadow-[0_24px_60px_-38px_rgba(15,23,42,0.75)]`}>
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
-        {Icon && (
-          <span className={`flex h-8 w-8 items-center justify-center rounded-md border ${iconClass}`}>
-            <Icon className="h-4 w-4" />
-          </span>
-        )}
-      </div>
-      <p className="mt-3 text-2xl font-semibold tracking-normal text-slate-950">{value}</p>
-      <p className={`mt-2 text-sm ${tone === "good" ? "text-emerald-700" : tone === "warn" ? "text-amber-700" : "text-slate-500"}`}>
-        {detail}
-      </p>
-    </section>
+    <DashboardMetricCard
+      detail={detail}
+      icon={icon}
+      label={label}
+      theme={{
+        accentLineClass: "bg-gradient-to-r from-slate-900 via-rose-500 to-emerald-500 opacity-75",
+        detailToneClass: {
+          good: "text-emerald-700",
+          neutral: "text-slate-500",
+          warn: "text-amber-700",
+        },
+        hoverClass: "hover:-translate-y-0.5 hover:border-white/30 hover:shadow-[0_24px_46px_-28px_rgba(0,0,0,0.7)]",
+        iconToneClass: {
+          good: "border-emerald-200 bg-emerald-50 text-emerald-700",
+          neutral: "border-slate-200 bg-white text-slate-600",
+          warn: "border-amber-200 bg-amber-50 text-amber-700",
+        },
+        labelClass: "text-slate-500",
+        panelClass,
+        toneClass: {
+          good: "from-emerald-50/90 to-white text-emerald-700",
+          neutral: "from-slate-50/90 to-white text-slate-600",
+          warn: "from-amber-50/90 to-white text-amber-700",
+        },
+        valueClass: "text-slate-950",
+      }}
+      tone={tone}
+      value={value}
+    />
   );
 }
 
-function DashboardHome({ report }: { report: ComputedReport }) {
-  const ranking = [...report.witel.rows].sort((a, b) => (a.rankAch ?? 999) - (b.rankAch ?? 999));
-  const topBranch = ranking[0];
-  const stfTotal = report.targetStf.witel.total;
-  const latestDay = latestPopulatedDay([report.witel, report.branch]);
-  const periodProgress = Math.round((latestDay / Math.max(report.dailyTrend.length, 1)) * 100);
-  const targetChart = report.witel.rows.map((row) => ({
-    name: row.label.replace(" JATENG ", " "),
-    target: row.targetFm,
-    targetStf: report.targetStf.witel.rows.find((item) => item.label === row.label)?.targetFm ?? 0,
-    realisasi: row.mtd,
+type DashboardTargetMode = "rkap" | "stf";
+type DashboardPeriodMode = "mtd" | "ytd";
+type DashboardPeriodOption = { label: string; periodKey: string; savedAt: string | null };
+type WilayahFilterKind = "all-telda" | "all-witel" | "telda" | "witel";
+type WilayahFilterOption = {
+  kind: WilayahFilterKind;
+  label: string;
+  rowLabel?: string;
+  value: string;
+};
+
+const wilayahFilterOptions: WilayahFilterOption[] = [
+  { kind: "all-telda", label: "ALL TELDA", value: "all-telda" },
+  { kind: "all-witel", label: "ALL WITEL", value: "all-witel" },
+  { kind: "telda", label: "WONOSOBO", value: "telda:WONOSOBO" },
+  { kind: "telda", label: "PURBALINGGA", value: "telda:PURBALINGGA" },
+  { kind: "telda", label: "PURWOKERTO", value: "telda:PURWOKERTO" },
+  { kind: "telda", label: "CILACAP", value: "telda:CILACAP" },
+  { kind: "telda", label: "MAGELANG", value: "telda:MAGELANG" },
+  { kind: "telda", label: "YOGYAKARTA", rowLabel: "MEA YOGYAKARTA", value: "telda:MEA YOGYAKARTA" },
+  { kind: "telda", label: "BANTUL", value: "telda:BANTUL" },
+  { kind: "telda", label: "KEBUMEN", value: "telda:KEBUMEN" },
+  { kind: "witel", label: "BALI", rowLabel: "BALI", value: "witel:BALI" },
+  { kind: "witel", label: "JTB", rowLabel: "JATIM BARAT", value: "witel:JATIM BARAT" },
+  { kind: "witel", label: "JTT", rowLabel: "JATIM TIMUR", value: "witel:JATIM TIMUR" },
+  { kind: "witel", label: "NUSRA", rowLabel: "NUSA TENGGARA", value: "witel:NUSA TENGGARA" },
+  { kind: "witel", label: "SCU", rowLabel: "SEMARANG JATENG UTARA", value: "witel:SEMARANG JATENG UTARA" },
+  { kind: "witel", label: "SJT", rowLabel: "SOLO JATENG TIMUR", value: "witel:SOLO JATENG TIMUR" },
+  { kind: "witel", label: "SURAMADU", rowLabel: "SURAMADU", value: "witel:SURAMADU" },
+  { kind: "witel", label: "JJS", rowLabel: "YOGYA JATENG SELATAN", value: "witel:YOGYA JATENG SELATAN" },
+];
+
+const witelShortLabels: Record<string, string> = {
+  BALI: "BALI",
+  "JATIM TIMUR": "JTT",
+  "JATIM BARAT": "JTB",
+  "NUSA TENGGARA": "NUSRA",
+  "SEMARANG JATENG UTARA": "SCU",
+  "SOLO JATENG TIMUR": "SJT",
+  "SOLO JATIMUR": "SJT",
+  SURAMADU: "SURAMADU",
+  "YOGYA JATENG SELATAN": "JJS",
+};
+
+function rowForWilayah(table: ReportTable, option: WilayahFilterOption) {
+  if (option.kind === "all-telda" || option.kind === "all-witel") return table.total;
+  const rowLabel = option.rowLabel ?? option.label;
+  return table.rows.find((row) => row.label === rowLabel) ?? table.total;
+}
+
+function displayLabelForRow(row: ReportRow, option?: WilayahFilterOption) {
+  if (option?.kind === "witel") return option.label;
+  if (option?.kind === "telda" && option.label === "YOGYAKARTA") return "YOGYAKARTA";
+  return witelShortLabels[row.label] ?? row.label;
+}
+
+function latestPopulatedDayForRows(rows: ReportRow[]) {
+  let latest = 0;
+  rows.forEach((row) => {
+    row.days.forEach((value, index) => {
+      if (hasActualValue(value)) latest = Math.max(latest, index + 1);
+    });
+  });
+  return Math.max(1, latest);
+}
+
+function comparableGrowth(current: number, previous: number | null | undefined) {
+  if (!previous || previous <= 0) return null;
+  return (current - previous) / previous;
+}
+
+function rankByAchievement(rows: ReportRow[], label: string) {
+  const ranked = [...rows].sort((a, b) => (b.targetAch ?? -1) - (a.targetAch ?? -1));
+  const index = ranked.findIndex((row) => row.label === label);
+  return index >= 0 ? index + 1 : null;
+}
+
+function shortageValue(row: ReportRow) {
+  return row.shortageFm;
+}
+
+function chartLabelNumber(value: unknown) {
+  return formatNumber(Number(value ?? 0));
+}
+
+function chartLabelPercent(value: unknown) {
+  return `${Number(value ?? 0).toFixed(1)}%`;
+}
+
+function DashboardHome({
+  onPeriodChange,
+  onPeriodFilterChange,
+  periodOptions,
+  periodFilter,
+  periodValidationMessage,
+  report,
+  selectedPeriodKey,
+}: {
+  onPeriodChange: (periodKey: string) => void;
+  onPeriodFilterChange: (value: DashboardPeriodFilterState) => void;
+  periodOptions: DashboardPeriodOption[];
+  periodFilter: DashboardPeriodFilterState;
+  periodValidationMessage: string | null;
+  report: ComputedReport;
+  selectedPeriodKey: string;
+}) {
+  const [wilayahFilter, setWilayahFilter] = useState("all-telda");
+  const [analyticsFilter, setAnalyticsFilter] = useState<{ period: DashboardPeriodMode; targetType: DashboardTargetMode }>({
+    period: "mtd",
+    targetType: "rkap",
+  });
+  const [trendMode, setTrendMode] = useState<DashboardTargetMode>("rkap");
+  const normalizedPeriodFilter = normalizePeriodFilter(periodFilter);
+  const isSingleMonthPeriod =
+    normalizedPeriodFilter.startMonth === normalizedPeriodFilter.endMonth &&
+    normalizedPeriodFilter.startDate === dateInputForPeriodKey(normalizedPeriodFilter.startMonth, "first") &&
+    normalizedPeriodFilter.endDate === dateInputForPeriodKey(normalizedPeriodFilter.endMonth, "last");
+  const periodMetricLabel = getPeriodSemanticLabel(normalizedPeriodFilter.mode);
+
+  const selectedWilayah = wilayahFilterOptions.find((option) => option.value === wilayahFilter) ?? wilayahFilterOptions[0];
+  const isWitelScope = selectedWilayah.kind === "all-witel" || selectedWilayah.kind === "witel";
+  const selectedRkapTable = isWitelScope ? report.witel : report.branch;
+  const selectedStfTable = isWitelScope ? report.targetStf.witel : report.targetStf.branch;
+  const selectedRkap = rowForWilayah(selectedRkapTable, selectedWilayah);
+  const selectedStf = rowForWilayah(selectedStfTable, selectedWilayah);
+  const latestDay = latestPopulatedDayForRows([selectedRkap, selectedStf]);
+  const periodProgress = Math.round((latestDay / Math.max(selectedRkap.days.length, 1)) * 100);
+  const isAllWilayah = selectedWilayah.kind === "all-telda" || selectedWilayah.kind === "all-witel";
+  const activeScopeLabel = selectedWilayah.label;
+  const activeScopeTypeLabel = isWitelScope ? "WITEL" : "TELDA";
+  const shortageRkap = shortageValue(selectedRkap);
+  const shortageStf = selectedStf.shortageFm;
+  const analyticsTable = analyticsFilter.targetType === "rkap" ? selectedRkapTable : selectedStfTable;
+  const analyticsSelectedRow = rowForWilayah(analyticsTable, selectedWilayah);
+  const analyticsAchievement = (row: ReportRow) => (analyticsFilter.period === "mtd" ? row.targetAch : row.achYtd) ?? 0;
+  const ranking = [...analyticsTable.rows].sort((a, b) => analyticsAchievement(b) - analyticsAchievement(a));
+  const selectedRank = isAllWilayah ? null : rankByAchievement(selectedRkapTable.rows, selectedRkap.label);
+  const growth = comparableGrowth(selectedRkap.mtd, selectedRkap.realMtdPrev);
+  const topWilayah = ranking[0];
+  const allTeldaRegionLabel = selectedWilayah.kind === "all-telda" ? " (YOGYA JATENG SELATAN)" : "";
+  const darkSummaryTitle = isAllWilayah
+    ? `HSI PERFORMA ${activeScopeLabel}${allTeldaRegionLabel}`
+    : `HSI PERFORMA ${activeScopeTypeLabel} ${activeScopeLabel}`;
+  const darkSummaryScope = `CAKUPAN: ${activeScopeLabel}`;
+  const targetChartPeriodLabel = analyticsFilter.period === "mtd" ? periodMetricLabel : "YTD";
+  const analyticsTargetLabel = analyticsFilter.targetType.toUpperCase();
+  const dataCutoffLabel = report.cutoffLabel.startsWith("DATA S.D.")
+    ? report.cutoffLabel
+    : formatDataCutoff({ day: latestDay, periodKey: normalizedPeriodFilter.endMonth });
+  const ytdPeriodLabel = formatYtdLabel(normalizedPeriodFilter.endDate);
+  const summaryMtdRankingRows = selectedRkapTable.rows.map((row) => ({
+    achievement: row.targetAch,
+    id: row.label,
+    label: displayLabelForRow(row),
   }));
-  const achievementChart = report.witel.rows.map((row) => ({
-    name: row.label.replace(" JATENG ", " "),
-    rkap: Number(((row.targetAch ?? 0) * 100).toFixed(2)),
-    stf: Number((((report.targetStf.witel.rows.find((item) => item.label === row.label)?.targetAch ?? 0) as number) * 100).toFixed(2)),
+  const summaryYtdRankingRows = selectedRkapTable.rows.map((row) => ({
+    achievement: row.achYtd,
+    id: row.label,
+    label: displayLabelForRow(row),
   }));
+  const targetChartValues = (row: ReportRow) => {
+    const target = analyticsFilter.period === "mtd" ? row.targetFm : row.targetYtd;
+    const realisasi = analyticsFilter.period === "mtd" ? row.mtd : row.realYtd;
+    const achievement = target > 0 ? realisasi / target : 0;
+    return {
+      achievement: Number((achievement * 100).toFixed(2)),
+      realisasi,
+      shortage: Math.max(target - realisasi, 0),
+      target,
+    };
+  };
+
+  const targetChart =
+    isAllWilayah
+      ? analyticsTable.rows.map((row) => ({
+          ...targetChartValues(row),
+          name: displayLabelForRow(row),
+        }))
+      : [
+          {
+            ...targetChartValues(analyticsSelectedRow),
+            name: activeScopeLabel,
+          },
+        ];
+
+  const trendTargetRow = trendMode === "rkap" ? selectedRkap : selectedStf;
+  const targetPerDay = trendTargetRow.targetFm / Math.max(trendTargetRow.days.length, 1);
+  const trendData = trendTargetRow.days.slice(0, latestDay).map((value, index) => {
+    const day = index + 1;
+    const realisasiKumulatif = selectedRkap.days
+      .slice(0, day)
+      .reduce<number>((sum, item) => sum + (typeof item === "number" ? item : 0), 0);
+    return {
+      day,
+      realisasi: typeof value === "number" ? value : null,
+      realisasiKumulatif,
+      targetKumulatif: Number((targetPerDay * day).toFixed(2)),
+    };
+  });
 
   return (
-    <div className="space-y-6">
-      <section className={`${panelClass} overflow-hidden`}>
-        <div className="relative grid gap-6 bg-[linear-gradient(135deg,#ffffff_0%,#f8fafc_42%,#fff1f2_100%)] p-5 lg:grid-cols-[1.15fr_0.85fr] lg:p-6">
-          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(15,23,42,0.045)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.045)_1px,transparent_1px)] bg-[size:44px_44px] opacity-60" />
-          <div className="relative">
-            <div className="flex flex-wrap gap-2">
-              <StatusPill>{report.periodLabel}</StatusPill>
-              <StatusPill>Cut-off {report.cutoffLabel}</StatusPill>
-              <StatusPill tone={report.validation.mismatches === 0 ? "good" : "warn"}>
-                Validasi: {report.validation.mismatches === 0 ? "match" : `${report.validation.mismatches} selisih`}
-              </StatusPill>
+    <div className="space-y-5">
+      <section className={`${panelClass} relative overflow-hidden`}>
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_88%_10%,rgba(56,189,248,0.16),transparent_28%),radial-gradient(circle_at_8%_18%,rgba(37,99,235,0.08),transparent_24%),linear-gradient(135deg,#ffffff_0%,#f8fbff_52%,#eef6ff_100%)]" />
+        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#071426] via-[#2563eb] to-[#38bdf8]" />
+        <div className="relative flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-[280px] flex-1">
+            <div>
+              <p className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase text-blue-700">
+                <Activity className="h-4 w-4" />
+                DASHBOARD REPORTING HSI 2026
+              </p>
+              <h1 className="mt-1 text-xl font-semibold uppercase tracking-normal text-[#071426] sm:text-2xl">
+                HSI PERFORMANCE
+              </h1>
+              <p className="mt-1 max-w-2xl text-xs font-medium uppercase leading-5 text-slate-500">
+                {report.periodLabel} | {activeScopeLabel} | {dataCutoffLabel}
+              </p>
             </div>
-            <p className="mt-6 inline-flex items-center gap-2 text-xs font-semibold uppercase text-rose-700">
-              <Activity className="h-4 w-4" />
-              PS Harian HSI
-            </p>
-            <h1 className="mt-2 max-w-4xl text-3xl font-semibold tracking-normal text-slate-950 sm:text-4xl">
-              Dashboard operasional {report.periodLabel}
-            </h1>
-            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
-              Ringkasan performa dari data MASTER tersimpan, report RKAP, dan Target STF dengan histori harian yang tetap terjaga.
-            </p>
-            <div className="mt-6 grid max-w-3xl gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border border-white/70 bg-white/75 p-3 shadow-sm backdrop-blur">
-                <p className="text-xs font-semibold uppercase text-slate-500">Data Aktual</p>
-                <p className="mt-2 text-lg font-semibold text-slate-950">Tanggal {latestDay}</p>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <DashboardPeriodFilter
+              onChange={(value) => {
+                const normalized = normalizePeriodFilter(value);
+                onPeriodFilterChange(normalized);
+                const anchorPeriod = normalized.mode === "date-range" ? normalized.endMonth : normalized.endMonth;
+                if (anchorPeriod !== selectedPeriodKey && periodOptions.some((option) => option.periodKey === anchorPeriod)) {
+                  onPeriodChange(anchorPeriod);
+                }
+              }}
+              options={periodOptions}
+              theme="hsi"
+              validationMessage={periodValidationMessage}
+              value={periodFilter}
+            />
+            <label className="grid gap-1 text-[11px] font-semibold uppercase text-slate-500">
+              WILAYAH
+              <select
+                className="h-9 w-[210px] rounded-md border border-[#d8e1ec] bg-white px-3 text-xs font-semibold text-[#071426] shadow-sm outline-none transition hover:border-blue-300 focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
+                value={wilayahFilter}
+                onChange={(event) => setWilayahFilter(event.target.value)}
+              >
+                <option value="all-telda">ALL TELDA</option>
+                <option value="all-witel">ALL WITEL</option>
+                <optgroup label="TELDA">
+                  {wilayahFilterOptions
+                    .filter((option) => option.kind === "telda")
+                    .map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                </optgroup>
+                <optgroup label="WITEL">
+                  {wilayahFilterOptions
+                    .filter((option) => option.kind === "witel")
+                    .map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                </optgroup>
+              </select>
+            </label>
+            <StatusPill tone={report.validation.mismatches === 0 ? "good" : "warn"}>
+              {report.validation.mismatches === 0 ? "VALIDASI MATCH" : `${report.validation.mismatches} SELISIH`}
+            </StatusPill>
+          </div>
+        </div>
+      </section>
+
+      <section className={`${panelClass} overflow-hidden`}>
+        <div className="relative grid items-start gap-4 bg-[linear-gradient(135deg,#ffffff_0%,#f8fbff_48%,#f4f8ff_100%)] p-4 xl:grid-cols-[1.35fr_0.65fr]">
+          <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(37,99,235,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(37,99,235,0.03)_1px,transparent_1px)] bg-[size:44px_44px] opacity-50" />
+          <div className="relative overflow-hidden rounded-xl border border-slate-200/90 bg-white shadow-[0_16px_36px_-28px_rgba(15,23,42,0.65)]">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-[#071426] px-3 py-2.5 text-white">
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-rose-200">HSI PERFORMANCE SUMMARY</p>
+                <h2 className="mt-0.5 text-sm font-semibold tracking-normal">PERIODE {report.periodLabel} | {activeScopeLabel}</h2>
               </div>
-              <div className="rounded-lg border border-white/70 bg-white/75 p-3 shadow-sm backdrop-blur">
-                <p className="text-xs font-semibold uppercase text-slate-500">Progress Bulan</p>
-                <p className="mt-2 text-lg font-semibold text-slate-950">{periodProgress}%</p>
+              <StatusPill>{dataCutoffLabel}</StatusPill>
+            </div>
+            <div className="grid gap-2.5 p-2.5 xl:grid-cols-2">
+              <div className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-2.5 py-2">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase text-rose-700">HSI PERFORMA {periodMetricLabel} ({report.periodLabel})</p>
+                    <p className="mt-0.5 text-xs font-semibold uppercase text-slate-950">{report.periodLabel} | {activeScopeLabel}</p>
+                  </div>
+                  <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase text-slate-600">
+                    RKAP
+                  </span>
+                </div>
+                <div className="grid gap-2 p-2.5">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-md border border-slate-200 bg-white p-2 shadow-sm">
+                      <p className="text-[10px] font-semibold uppercase text-slate-500">TARGET RKAP {periodMetricLabel}</p>
+                      <p className="mt-0.5 text-base font-semibold text-slate-950">{formatNumber(selectedRkap.targetFm)}</p>
+                    </div>
+                    <div className="rounded-md border border-emerald-100 bg-emerald-50/70 p-2 shadow-sm">
+                      <p className="text-[10px] font-semibold uppercase text-emerald-700">REALISASI {periodMetricLabel}</p>
+                      <p className="mt-0.5 text-base font-semibold text-emerald-950">{formatNumber(selectedRkap.mtd)}</p>
+                    </div>
+                    <div className="rounded-md border border-amber-100 bg-amber-50/70 p-2 shadow-sm">
+                      <p className="text-[10px] font-semibold uppercase text-amber-700">ACH RKAP {periodMetricLabel}</p>
+                      <p className="mt-0.5 text-base font-semibold text-amber-950">{formatPercent(selectedRkap.targetAch)}</p>
+                    </div>
+                    <div className="rounded-md border border-rose-100 bg-rose-50/70 p-2 shadow-sm">
+                      <p className="text-[10px] font-semibold uppercase text-rose-700">SHORTAGE RKAP {periodMetricLabel}</p>
+                      <p className="mt-0.5 text-base font-semibold text-rose-950">{formatNumber(shortageRkap)}</p>
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-slate-50/80 p-2">
+                    <div className="flex items-center justify-between text-[11px] font-semibold uppercase">
+                      <span className="text-slate-500">ACHIEVEMENT {periodMetricLabel}</span>
+                      <span className="text-emerald-700">{formatPercent(selectedRkap.targetAch)}</span>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-500"
+                        style={{ width: `${Math.min((selectedRkap.targetAch ?? 0) * 100, 100)}%` }}
+                      />
+                    </div>
+                    <CompactRankingInsight
+                      formatPercent={formatPercent}
+                      isAllScope={isAllWilayah}
+                      periodLabel={periodMetricLabel}
+                      rows={summaryMtdRankingRows}
+                      scopeLabel={activeScopeTypeLabel}
+                      selectedId={selectedRkap.label}
+                    />
+                  </div>
+                </div>
               </div>
-              <div className="rounded-lg border border-white/70 bg-white/75 p-3 shadow-sm backdrop-blur">
-                <p className="text-xs font-semibold uppercase text-slate-500">Top WITEL</p>
-                <p className="mt-2 truncate text-lg font-semibold text-slate-950">{topBranch?.label ?? "-"}</p>
+
+              <div className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-2.5 py-2">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase text-rose-700">HSI PERFORMA YTD (TAHUN BERJALAN)</p>
+                    <p className="mt-0.5 text-xs font-semibold uppercase text-slate-950">{ytdPeriodLabel} | {activeScopeLabel}</p>
+                  </div>
+                  <span className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold uppercase text-slate-600">
+                    RKAP
+                  </span>
+                </div>
+                <div className="grid gap-2 p-2.5">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-md border border-slate-200 bg-white p-2 shadow-sm">
+                      <p className="text-[10px] font-semibold uppercase text-slate-500">TARGET RKAP YTD</p>
+                      <p className="mt-0.5 text-base font-semibold text-slate-950">{formatNumber(selectedRkap.targetYtd)}</p>
+                    </div>
+                    <div className="rounded-md border border-emerald-100 bg-emerald-50/70 p-2 shadow-sm">
+                      <p className="text-[10px] font-semibold uppercase text-emerald-700">REALISASI YTD</p>
+                      <p className="mt-0.5 text-base font-semibold text-emerald-950">{formatNumber(selectedRkap.realYtd)}</p>
+                    </div>
+                    <div className="rounded-md border border-amber-100 bg-amber-50/70 p-2 shadow-sm">
+                      <p className="text-[10px] font-semibold uppercase text-amber-700">ACH RKAP YTD</p>
+                      <p className="mt-0.5 text-base font-semibold text-amber-950">{formatPercent(selectedRkap.achYtd)}</p>
+                    </div>
+                    <div className="rounded-md border border-rose-100 bg-rose-50/70 p-2 shadow-sm">
+                      <p className="text-[10px] font-semibold uppercase text-rose-700">SHORTAGE RKAP YTD</p>
+                      <p className="mt-0.5 text-base font-semibold text-rose-950">{formatNumber(selectedRkap.shortageYtd)}</p>
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-slate-200 bg-slate-50/80 p-2">
+                    <div className="flex items-center justify-between text-[11px] font-semibold uppercase">
+                      <span className="text-slate-500">ACHIEVEMENT YTD</span>
+                      <span className="text-emerald-700">{formatPercent(selectedRkap.achYtd)}</span>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-500"
+                        style={{ width: `${Math.min((selectedRkap.achYtd ?? 0) * 100, 100)}%` }}
+                      />
+                    </div>
+                    <CompactRankingInsight
+                      formatPercent={formatPercent}
+                      isAllScope={isAllWilayah}
+                      periodLabel="YTD"
+                      rows={summaryYtdRankingRows}
+                      scopeLabel={activeScopeTypeLabel}
+                      selectedId={selectedRkap.label}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-          <div className="relative rounded-lg border border-slate-800 bg-slate-950 p-5 text-white shadow-[0_30px_70px_-42px_rgba(15,23,42,0.95)]">
-            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-rose-300 to-transparent" />
-            <div className="flex items-center justify-between gap-4">
-              <p className="text-sm font-medium text-slate-300">Total Realisasi MTD</p>
-              <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-200">
-                Live
-              </span>
-            </div>
-            <p className="mt-4 text-5xl font-semibold tracking-normal text-white">{formatNumber(report.witel.total.mtd)}</p>
-            <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10">
-              <div className="h-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-400" style={{ width: `${Math.min(periodProgress, 100)}%` }} />
-            </div>
-            <div className="mt-5 grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
-                <p className="text-slate-400">Ach RKAP</p>
-                <p className="mt-1 font-semibold text-white">{formatPercent(report.witel.total.targetAch)}</p>
+          <div className="relative self-start overflow-hidden rounded-xl border border-cyan-300/20 bg-[linear-gradient(145deg,#020617_0%,#071426_48%,#0a1f3b_100%)] p-5 text-white shadow-[0_30px_78px_-42px_rgba(56,189,248,0.55)]">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_86%_4%,rgba(56,189,248,0.18),transparent_30%)]" />
+            <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300 to-transparent" />
+            <div className="relative">
+              <div className="flex items-center justify-between gap-4">
+                <p className="max-w-[250px] text-sm font-semibold uppercase leading-5 text-slate-100">
+                  {darkSummaryTitle}
+                </p>
+                <span className="rounded-md border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-[11px] font-semibold text-emerald-200">
+                  SOURCE: XPRO
+                </span>
               </div>
-              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
-                <p className="text-slate-400">Ach STF</p>
-                <p className="mt-1 font-semibold text-white">{formatPercent(stfTotal.targetAch)}</p>
+              <p className="mt-3 text-[11px] font-semibold uppercase text-slate-500">{darkSummaryScope}</p>
+              <p className="mt-3 text-xs font-semibold uppercase text-slate-400">TOTAL REALISASI {periodMetricLabel}</p>
+              <p className="mt-1.5 text-4xl font-semibold tracking-normal text-white">{formatNumber(selectedRkap.mtd)}</p>
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
+                <div className="h-full rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-400" style={{ width: `${Math.min(periodProgress, 100)}%` }} />
               </div>
-              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
-                <p className="text-slate-400">Shortage STF</p>
-                <p className="mt-1 font-semibold text-amber-200">{formatNumber(stfTotal.shortageFm)}</p>
-              </div>
-              <div className="rounded-lg border border-white/10 bg-white/[0.04] p-3">
-                <p className="text-slate-400">Source</p>
-                <p className="mt-1 font-semibold text-white">Xpro</p>
+              <div className="mt-4 grid grid-cols-2 gap-2.5 text-sm">
+                <div className="rounded-md border border-white/10 bg-white/[0.04] p-3">
+                  <p className="text-xs font-semibold uppercase text-slate-400">ACH RKAP</p>
+                  <p className="mt-1 text-base font-semibold text-white">{formatPercent(selectedRkap.targetAch)}</p>
+                </div>
+                <div className="rounded-md border border-white/10 bg-white/[0.04] p-3">
+                  <p className="text-xs font-semibold uppercase text-slate-400">ACH STF</p>
+                  <p className="mt-1 text-base font-semibold text-white">{formatPercent(selectedStf.targetAch)}</p>
+                </div>
+                <div className="rounded-md border border-white/10 bg-white/[0.04] p-3">
+                  <p className="text-xs font-semibold uppercase text-slate-400">SHORTAGE RKAP</p>
+                  <p className="mt-1 text-base font-semibold text-amber-200">{formatNumber(shortageRkap)}</p>
+                </div>
+                <div className="rounded-md border border-white/10 bg-white/[0.04] p-3">
+                  <p className="text-xs font-semibold uppercase text-slate-400">SHORTAGE STF</p>
+                  <p className="mt-1 text-base font-semibold text-amber-200">{formatNumber(shortageStf)}</p>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <MetricCard label="Target FM RKAP" value={formatNumber(report.witel.total.targetFm)} detail="Baseline report sementara" icon={Target} />
-        <MetricCard label="Target FM STF" value={formatNumber(stfTotal.targetFm)} detail="Baseline target STF" icon={Gauge} />
-        <MetricCard label="Realisasi MTD" value={formatNumber(report.witel.total.mtd)} detail={`Update ${report.cutoffLabel}`} tone="good" icon={TrendingUp} />
-        <MetricCard label="Ach RKAP" value={formatPercent(report.witel.total.targetAch)} detail="Realisasi / Target RKAP" icon={ArrowUpRight} />
-        <MetricCard label="Ach STF" value={formatPercent(stfTotal.targetAch)} detail="Realisasi / Target STF" icon={ArrowUpRight} />
-        <MetricCard label="Shortage STF" value={formatNumber(stfTotal.shortageFm)} detail="Sisa menuju target STF" tone="warn" icon={FileSpreadsheet} />
+      <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <MetricCard label="PERFORMANCE BY RKAP 2026" value={formatNumber(selectedRkap.targetYtd)} detail="TARGET RKAP YTD 2026" icon={Target} />
+        <MetricCard label={`REALISASI ${periodMetricLabel}`} value={formatNumber(selectedRkap.mtd)} detail={`UPDATE ${report.cutoffLabel}`} tone="good" icon={TrendingUp} />
+        <MetricCard label="ACH RKAP" value={formatPercent(selectedRkap.targetAch)} detail="REALISASI / TARGET RKAP" icon={ArrowUpRight} />
+        <MetricCard label={isSingleMonthPeriod ? "SHORTAGE CURRENT MONTH RKAP" : "SHORTAGE SELECTED PERIOD RKAP"} value={formatNumber(shortageRkap)} detail={`REALISASI ${periodMetricLabel} - TARGET RKAP ${periodMetricLabel}`} tone="warn" icon={FileSpreadsheet} />
+        <MetricCard label={isSingleMonthPeriod ? "GROWTH VS LAST MONTH" : "GROWTH VS COMPARABLE PERIOD"} value={growth === null ? "N/A" : formatPercent(growth)} detail={isSingleMonthPeriod ? "DIBANDINGKAN MTD BULAN SEBELUMNYA" : "DIBANDINGKAN PERIODE PEMBANDING"} icon={Gauge} />
+        <MetricCard
+          label="RANKING WILAYAH"
+          value={isAllWilayah ? (topWilayah ? displayLabelForRow(topWilayah) : "N/A") : selectedRank ? `#${selectedRank}` : "N/A"}
+          detail={isAllWilayah ? `TOP ${activeScopeTypeLabel} ${formatPercent(topWilayah?.targetAch)}` : `DARI ${selectedRkapTable.rows.length} ${activeScopeTypeLabel}`}
+          icon={ShieldCheck}
+        />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
-        <section className={`${panelClass} p-5`}>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold text-slate-950">Target vs Realisasi per WITEL</h2>
+      <section className={`${panelClass} overflow-hidden bg-white`}>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#eaeff5] px-6 py-5">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-600">Performance Analytics</p>
+            <h2 className="mt-1 text-[28px] font-bold uppercase leading-tight tracking-[-0.02em] text-slate-950">Regional Performance</h2>
+            <p className="mt-1 text-sm font-medium text-slate-500">Ringkasan performa dan ranking achievement per TELDA</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold uppercase text-slate-700 shadow-sm outline-none focus:border-blue-400"
+              value={analyticsFilter.period}
+              onChange={(event) => setAnalyticsFilter((current) => ({ ...current, period: event.target.value as DashboardPeriodMode }))}
+            >
+              <option value="mtd">{periodMetricLabel}</option>
+              <option value="ytd">YTD</option>
+            </select>
+            <select
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold uppercase text-slate-700 shadow-sm outline-none focus:border-blue-400"
+              value={analyticsFilter.targetType}
+              onChange={(event) => setAnalyticsFilter((current) => ({ ...current, targetType: event.target.value as DashboardTargetMode }))}
+            >
+              <option value="rkap">RKAP</option>
+              <option value="stf">STF</option>
+            </select>
             <StatusPill>{report.periodLabel}</StatusPill>
           </div>
-          <div className="h-[340px]">
+        </div>
+        <div className="grid xl:grid-cols-[1.45fr_0.95fr]">
+          <div className="p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold uppercase text-slate-950">TARGET VS REALISASI PER WILAYAH</h2>
+              <p className="mt-1 text-[13px] font-medium uppercase text-slate-500">
+                INDIKATOR {targetChartPeriodLabel} {analyticsTargetLabel}: TARGET, REALISASI, SHORTAGE, DAN ACHIEVEMENT PER {activeScopeTypeLabel}
+              </p>
+            </div>
+          </div>
+          <div className="h-[360px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={targetChart} margin={{ left: 0, right: 16, top: 8, bottom: 36 }}>
+              <ComposedChart data={targetChart} margin={{ left: 0, right: 22, top: 24, bottom: isAllWilayah ? 84 : 42 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis dataKey="name" angle={-28} textAnchor="end" interval={0} height={80} tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} />
-                <Bar dataKey="target" name="Target RKAP" fill="#64748b" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="targetStf" name="Target STF" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="realisasi" fill="#be123c" radius={[4, 4, 0, 0]} />
-              </BarChart>
+                <XAxis
+                  dataKey="name"
+                  interval={0}
+                  tick={{ angle: isAllWilayah ? -42 : 0, dx: isAllWilayah ? -10 : 0, dy: isAllWilayah ? 20 : 0, fontSize: isAllWilayah ? 8 : 12, fontWeight: 700, textAnchor: isAllWilayah ? "end" : "middle" }}
+                  tickMargin={isAllWilayah ? 18 : 6}
+                />
+                <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} unit="%" />
+                <Tooltip
+                  contentStyle={chartTooltipStyle}
+                  formatter={(value, name) => (name === "ACHIEVEMENT" ? tooltipPercent(value) : tooltipNumber(value))}
+                />
+                <Bar yAxisId="left" dataKey="target" name="TARGET" fill="#64748b" radius={[4, 4, 0, 0]}>
+                  <LabelList dataKey="target" position="top" formatter={chartLabelNumber} fontSize={10} />
+                </Bar>
+                <Bar yAxisId="left" dataKey="realisasi" name="REALISASI" fill="#f97316" radius={[4, 4, 0, 0]}>
+                  <LabelList dataKey="realisasi" position="top" formatter={chartLabelNumber} fontSize={10} />
+                </Bar>
+                <Bar yAxisId="left" dataKey="shortage" name="SHORTAGE" fill="#e11d48" radius={[4, 4, 0, 0]}>
+                  <LabelList dataKey="shortage" position="top" formatter={chartLabelNumber} fontSize={10} />
+                </Bar>
+                <Line yAxisId="right" type="monotone" dataKey="achievement" name="ACHIEVEMENT" stroke="#059669" strokeWidth={3} dot={{ r: 3 }}>
+                  <LabelList dataKey="achievement" position="top" formatter={chartLabelPercent} fontSize={10} fill="#047857" />
+                </Line>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
-        </section>
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs font-bold uppercase">
+            <span className="inline-flex items-center gap-1.5 text-emerald-600">
+              <span className="h-0.5 w-5 rounded-full bg-emerald-600" />
+              Achievement
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-orange-600">
+              <span className="h-3 w-3 rounded-sm bg-orange-500" />
+              Realisasi
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-rose-600">
+              <span className="h-3 w-3 rounded-sm bg-rose-600" />
+              Shortage
+            </span>
+            <span className="inline-flex items-center gap-1.5 text-slate-600">
+              <span className="h-3 w-3 rounded-sm bg-slate-500" />
+              Target
+            </span>
+          </div>
+          </div>
 
-        <section className={`${panelClass} p-5`}>
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-950">Ranking Achievement</h2>
+        <div className="border-t border-slate-100 p-4 xl:border-l xl:border-t-0">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold uppercase text-slate-950">RANKING ACHIEVEMENT</h2>
+              <p className="mt-1 text-[13px] font-medium uppercase text-slate-500">RANKING BERDASARKAN ACH {analyticsTargetLabel} {targetChartPeriodLabel}</p>
+            </div>
             <ShieldCheck className="h-5 w-5 text-emerald-600" />
           </div>
-          <div className="mt-4 divide-y divide-slate-100">
+          <div className="mt-3 divide-y divide-slate-100">
             {ranking.map((row) => (
-              <div key={row.label} className="grid grid-cols-[40px_1fr_auto] items-center gap-3 py-3 text-sm">
-                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-950 font-semibold text-white shadow-sm">
-                  {row.rankAch}
+              <div
+                key={row.label}
+                className={`grid grid-cols-[34px_1fr_auto] items-center gap-3 py-2.5 text-sm ${row.label === analyticsSelectedRow.label ? "rounded-md bg-rose-50/70 px-2" : ""}`}
+              >
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-950 text-xs font-semibold text-white shadow-sm">
+                  {ranking.findIndex((item) => item.label === row.label) + 1}
                 </span>
                 <div className="min-w-0">
-                  <span className="font-medium text-slate-800">{row.label}</span>
-                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full bg-gradient-to-r from-rose-500 to-emerald-500" style={{ width: `${Math.min((row.targetAch ?? 0) * 100, 100)}%` }} />
+                  <span className="font-medium uppercase text-slate-800">{displayLabelForRow(row)}</span>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                    <div className="h-full rounded-full bg-gradient-to-r from-rose-500 to-emerald-500" style={{ width: `${Math.min(analyticsAchievement(row) * 100, 100)}%` }} />
                   </div>
                 </div>
-                <span className="font-semibold text-rose-700">{formatPercent(row.targetAch)}</span>
+                <span className="font-semibold text-rose-700">{formatPercent(analyticsAchievement(row))}</span>
               </div>
             ))}
           </div>
-        </section>
-      </div>
+        </div>
+        </div>
+      </section>
 
-      <div className="grid gap-5 xl:grid-cols-2">
-        <section className={`${panelClass} p-5`}>
-          <h2 className="text-lg font-semibold text-slate-950">Achievement RKAP vs STF</h2>
-          <div className="mt-4 h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={achievementChart} margin={{ left: 0, right: 16, top: 8, bottom: 36 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis dataKey="name" angle={-28} textAnchor="end" interval={0} height={78} tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} unit="%" />
-                <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipPercent(value)} />
-                <Bar dataKey="rkap" name="Ach RKAP" fill="#0f766e" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="stf" name="Ach STF" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+      <section className={`${panelClass} p-4`}>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold uppercase text-slate-950">TREN TARGET HARIAN VS REALISASI HARIAN</h2>
+            <p className="mt-1 text-xs font-medium uppercase text-slate-500">TARGET KUMULATIF HARIAN VS REALISASI KUMULATIF HARIAN</p>
           </div>
-        </section>
-
-        <section className={`${panelClass} p-5`}>
-          <h2 className="text-lg font-semibold text-slate-950">Tren Realisasi Harian</h2>
-          <div className="mt-4 h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={report.dailyTrend} margin={{ left: 0, right: 16, top: 8, bottom: 8 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                <XAxis dataKey="day" tick={{ fontSize: 12 }} />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} labelFormatter={(day) => `Tanggal ${day}`} />
-                <Line type="monotone" dataKey="realisasi" stroke="#be123c" strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="cumulative" stroke="#0f766e" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-      </div>
+          <select
+            className="h-9 rounded-md border border-slate-200 bg-white px-3 text-xs font-semibold uppercase text-slate-700 shadow-sm outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
+            value={trendMode}
+            onChange={(event) => setTrendMode(event.target.value as DashboardTargetMode)}
+          >
+            <option value="rkap">RKAP</option>
+            <option value="stf">STF</option>
+          </select>
+        </div>
+        <div className="mt-3 h-[350px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={trendData} margin={{ left: 0, right: 24, top: 16, bottom: 8 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+              <XAxis dataKey="day" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => tooltipNumber(value)} labelFormatter={(day) => `TANGGAL ${day}`} />
+              <Legend wrapperStyle={{ fontSize: 12, fontWeight: 700 }} />
+              <Line type="monotone" dataKey="targetKumulatif" name="TARGET KUMULATIF HARIAN" stroke="#64748b" strokeWidth={3} dot={false} />
+              <Line type="monotone" dataKey="realisasiKumulatif" name="REALISASI KUMULATIF HARIAN" stroke="#0f766e" strokeWidth={3} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
     </div>
   );
 }
@@ -1033,10 +1835,6 @@ function MasterPage({
         <div>
           <p className="text-sm font-semibold uppercase text-rose-700">MASTER</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-normal text-slate-950">Input Data Utama</h1>
-          <p className="mt-2 max-w-3xl text-sm text-slate-500">
-            Struktur kolom mengikuti sheet MASTER. Paste multi-row dan multi-column dari Excel langsung ke sel tabel. Saat disimpan,
-            angka tanggal yang sudah pernah masuk report tetap dipertahankan.
-          </p>
           <div className="mt-3 flex flex-wrap gap-2">
             <StatusPill>Bulan aktif: {periodLabel}</StatusPill>
             <StatusPill>Terakhir disimpan: {formatSavedAt(savedAt)}</StatusPill>
@@ -1356,6 +2154,7 @@ function drawCell(
 function drawReportTableCanvas(
   context: CanvasRenderingContext2D,
   table: ReportTable,
+  exportStartDay: number,
   latestDay: number,
   periodLabel: string,
   previousMonthLabel: string,
@@ -1368,6 +2167,7 @@ function drawReportTableCanvas(
   const targetWidth = reportCanvasColumns.target;
   const dayWidth = reportCanvasColumns.day;
   const summaryWidth = reportCanvasColumns.summary;
+  const exportDayCount = latestDay - exportStartDay + 1;
   const titleHeight = 58;
   const groupHeaderHeight = 36;
   const dayHeaderHeight = 26;
@@ -1429,15 +2229,15 @@ function drawReportTableCanvas(
     wrap: true,
   });
   cursorX += targetWidth;
-  drawCell(context, "TANGGAL", cursorX, headerY, latestDay * dayWidth, groupHeaderHeight, {
+  drawCell(context, "TANGGAL", cursorX, headerY, exportDayCount * dayWidth, groupHeaderHeight, {
     align: "center",
     border: "#0f766e",
     fill: "#0f766e",
     font: "700 11px Arial",
     textColor: "#ffffff",
   });
-  for (let index = 0; index < latestDay; index += 1) {
-    drawCell(context, String(index + 1), cursorX + index * dayWidth, headerY + groupHeaderHeight, dayWidth, dayHeaderHeight, {
+  for (let day = exportStartDay; day <= latestDay; day += 1) {
+    drawCell(context, String(day), cursorX + (day - exportStartDay) * dayWidth, headerY + groupHeaderHeight, dayWidth, dayHeaderHeight, {
       align: "center",
       border: "#99f6e4",
       fill: "#ccfbf1",
@@ -1445,7 +2245,7 @@ function drawReportTableCanvas(
       textColor: "#134e4a",
     });
   }
-  cursorX += latestDay * dayWidth;
+  cursorX += exportDayCount * dayWidth;
   for (const header of summaryHeaders) {
     drawCell(context, header, cursorX, headerY, summaryWidth, groupHeaderHeight + dayHeaderHeight, {
       align: "center",
@@ -1483,7 +2283,7 @@ function drawReportTableCanvas(
       textColor: "#312e81",
     });
     cellX += targetWidth;
-    row.days.slice(0, latestDay).forEach((value) => {
+    row.days.slice(exportStartDay - 1, latestDay).forEach((value) => {
       drawCell(context, formatNumber(value), cellX, rowY, dayWidth, rowHeight, {
         fill: baseFill,
         font: bodyFont,
@@ -1561,7 +2361,9 @@ async function createReportPng(
   const dayWidth = reportCanvasColumns.day;
   const summaryWidth = reportCanvasColumns.summary;
   const summaryHeaders = summaryHeadersFor(previousMonthLabel);
-  const tableWidth = labelWidth + targetWidth * 2 + latestDay * dayWidth + summaryHeaders.length * summaryWidth;
+  const exportStartDay = Math.max(1, latestDay - 6);
+  const exportDayCount = latestDay - exportStartDay + 1;
+  const tableWidth = labelWidth + targetWidth * 2 + exportDayCount * dayWidth + summaryHeaders.length * summaryWidth;
   const tableHeight = 58 + 36 + 26 + 9 * 28;
   const logicalWidth = tableWidth + padding * 2;
   const logicalHeight = padding + 68 + tableHeight + 22 + tableHeight + padding;
@@ -1577,18 +2379,18 @@ async function createReportPng(
   context.font = "700 28px Arial";
   context.textAlign = "left";
   context.textBaseline = "top";
-  context.fillText(variant === "stf" ? "Report HSI Target STF SEPT" : "Report Sementara SEPT 2026", padding, padding);
+  context.fillText(variant === "stf" ? "Report HSI Target STF" : "Report HSI Target RKAP", padding, padding);
   context.fillStyle = "#475569";
   context.font = "15px Arial";
   context.fillText(`Downloaded: ${formatJakartaDateTime(timestamp, false)}`, padding, padding + 36);
-  context.fillText(`Periode: ${periodLabel} | Cut-off tanggal aktual terakhir: ${latestDay}`, padding + 360, padding + 36);
+  context.fillText(`Periode: ${periodLabel} | Tanggal ${exportStartDay}-${latestDay}`, padding + 360, padding + 36);
   context.fillStyle = "#881337";
   context.font = "700 12px Arial";
   context.textAlign = "right";
   context.fillText("CONFIDENTIAL - INTERNAL USE ONLY", logicalWidth - padding, padding + 8);
   context.textAlign = "left";
-  const firstTableHeight = drawReportTableCanvas(context, witelTable, latestDay, periodLabel, previousMonthLabel, padding, padding + 68, tableWidth);
-  drawReportTableCanvas(context, branchTable, latestDay, periodLabel, previousMonthLabel, padding, padding + 68 + firstTableHeight + 22, tableWidth);
+  const firstTableHeight = drawReportTableCanvas(context, witelTable, exportStartDay, latestDay, periodLabel, previousMonthLabel, padding, padding + 68, tableWidth);
+  drawReportTableCanvas(context, branchTable, exportStartDay, latestDay, periodLabel, previousMonthLabel, padding, padding + 68 + firstTableHeight + 22, tableWidth);
   drawConfidentialWatermark(context, logicalWidth, logicalHeight);
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("Gagal menyimpan PNG."))), "image/png", 1);
@@ -1620,14 +2422,11 @@ function ReportPage({ report, variant }: { report: ComputedReport; variant: "sem
       <div className={`${panelClass} flex flex-wrap items-end justify-between gap-4 bg-[linear-gradient(135deg,#ffffff,#f8fafc_55%,#fff1f2)] p-5`}>
         <div>
           <p className="text-sm font-semibold uppercase text-rose-700">
-            {isStf ? "Report HSI Target STF SEPT" : "Report Sementara SEPT 2026"}
+            {isStf ? "Report HSI Target STF" : "Report HSI Target RKAP"}
           </p>
           <h1 className="mt-1 text-3xl font-semibold tracking-normal text-slate-950">
-            {isStf ? "Dua Tabel Utama Target STF" : "Dua Tabel Utama Report"}
+            {isStf ? "Dua Tabel Utama Target STF" : "Dua Tabel Utama Target RKAP"}
           </h1>
-          <p className="mt-2 max-w-3xl text-sm text-slate-500">
-            Area helper dan tabel internal tidak ditampilkan. Perhitungan tetap dijalankan di JavaScript dari MASTER.
-          </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <p className="text-sm font-medium text-slate-600">
               Last rendered: {formatJakartaDateTime(now, true)}
@@ -1665,7 +2464,13 @@ function ReportPage({ report, variant }: { report: ComputedReport; variant: "sem
   );
 }
 
-export function HsiDashboard() {
+const fullAccessPermissions: DashboardPermissions = {
+  canAccessMaster: true,
+  canEditMaster: true,
+  canViewDashboard: true,
+};
+
+export function HsiDashboard({ permissions = fullAccessPermissions }: { permissions?: DashboardPermissions }) {
   const router = useRouter();
   const [view, setView] = useState<View>("home");
   const [rows, setRows] = useState<MasterRow[]>(() => initialMasterRows());
@@ -1678,6 +2483,39 @@ export function HsiDashboard() {
   const [dirty, setDirty] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState("Auto-save standby");
   const [hydrated, setHydrated] = useState(false);
+  const [masterUnlockToken, setMasterUnlockToken] = useState<string | null>(null);
+  const [masterUnlockOpen, setMasterUnlockOpen] = useState(false);
+  const [periodFilter, setPeriodFilter] = useState<DashboardPeriodFilterState>(() => defaultPeriodFilter(currentJakartaPeriodKey()));
+  const visibleNavItems = useMemo(
+    () => navItems.filter((item) => item.id !== "master" || permissions.canAccessMaster),
+    [permissions.canAccessMaster],
+  );
+  const renderView: View = view === "master" && (!permissions.canAccessMaster || !masterUnlockToken) ? "home" : view;
+
+  const applyPersistedState = useCallback((state: DashboardPersistedState, status: string) => {
+    const activePeriod = state.periodArchive[state.selectedPeriodKey];
+    if (!activePeriod) return;
+    setPeriodArchive(state.periodArchive);
+    setSelectedPeriodKey(state.selectedPeriodKey);
+    setRows(activePeriod.rows);
+    setSavedAt(activePeriod.savedAt);
+    setReportHistory(activePeriod.reportHistory);
+    setSaveSnapshots(state.saveSnapshots);
+    setMasterHeadersCleared(state.masterHeadersCleared);
+    setDirty(false);
+    setAutoSaveStatus(status);
+    persistDashboardStateLocally(state);
+  }, []);
+
+  const syncDashboardState = useCallback((state: DashboardPersistedState, successStatus: string) => {
+    void saveDashboardStateToServer(state, masterUnlockToken)
+      .then((result) => {
+        setAutoSaveStatus(result.configured ? successStatus : "Data tersimpan di browser; database server belum dikonfigurasi");
+      })
+      .catch(() => {
+        setAutoSaveStatus("Data tersimpan di browser; sync server gagal");
+      });
+  }, [masterUnlockToken]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -1761,10 +2599,21 @@ export function HsiDashboard() {
       } else {
         window.localStorage.removeItem(REPORT_HISTORY_KEY);
       }
+      void loadDashboardStateFromServer()
+        .then(({ configured, state }) => {
+          if (state) {
+            applyPersistedState(state, "Data server dimuat");
+          } else if (!configured) {
+            setAutoSaveStatus("Database server belum dikonfigurasi; data tersimpan di browser ini");
+          }
+        })
+        .catch(() => {
+          setAutoSaveStatus("Data lokal dimuat; server belum bisa diakses");
+        });
       setHydrated(true);
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, []);
+  }, [applyPersistedState]);
 
   const report = useMemo(() => {
     const activePeriodKey = selectedPeriodKey || detectPeriodKey(rows);
@@ -1777,6 +2626,12 @@ export function HsiDashboard() {
       previousMonthLabel: previousMonthLabelFromKey(activePeriodKey),
     };
   }, [periodArchive, reportHistory, rows, savedAt, selectedPeriodKey]);
+
+  const filteredReportState = useMemo(
+    () => reportForPeriodFilter(report, periodArchive, selectedPeriodKey, periodFilter),
+    [periodArchive, periodFilter, report, selectedPeriodKey],
+  );
+  const displayReport = filteredReportState.report;
 
   const periodOptions = useMemo(
     () => {
@@ -1816,22 +2671,25 @@ export function HsiDashboard() {
       ...periodArchive,
       [periodKey]: createPeriodEntry(periodKey, rows, timestamp, nextHistory),
     };
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
-    window.localStorage.setItem(SAVED_AT_KEY, timestamp);
-    window.localStorage.setItem(REPORT_HISTORY_KEY, JSON.stringify(nextHistory));
-    window.localStorage.setItem(PERIOD_ARCHIVE_KEY, JSON.stringify(nextArchive));
-    window.localStorage.setItem(SELECTED_PERIOD_KEY, periodKey);
-    window.localStorage.setItem(DATA_VERSION_KEY, seedData.dataVersion);
-    window.localStorage.setItem(SAVE_SNAPSHOTS_KEY, JSON.stringify(nextSnapshots));
-    window.localStorage.setItem(MASTER_HEADERS_CLEARED_KEY, String(masterHeadersCleared));
+    const persistedState: DashboardPersistedState = {
+      dataVersion: seedData.dataVersion,
+      masterHeadersCleared,
+      periodArchive: nextArchive,
+      saveSnapshots: nextSnapshots,
+      selectedPeriodKey: periodKey,
+      updatedAt: timestamp,
+    };
+    persistDashboardStateLocally(persistedState);
     setPeriodArchive(nextArchive);
     setReportHistory(nextHistory);
     setSelectedPeriodKey(periodKey);
     setSavedAt(timestamp);
     setSaveSnapshots(nextSnapshots);
     setDirty(false);
-    setAutoSaveStatus(options.automated ? `Auto-save tersimpan: ${formatJakartaDateTime(new Date(timestamp), true)}` : "Data tersimpan manual");
-  }, [masterHeadersCleared, periodArchive, reportHistory, rows, saveSnapshots, selectedPeriodKey]);
+    const status = options.automated ? `Auto-save tersimpan: ${formatJakartaDateTime(new Date(timestamp), true)}` : "Data tersimpan manual";
+    setAutoSaveStatus(status);
+    syncDashboardState(persistedState, `${status} dan tersinkron ke server`);
+  }, [masterHeadersCleared, periodArchive, reportHistory, rows, saveSnapshots, selectedPeriodKey, syncDashboardState]);
 
   useEffect(() => {
     if (!hydrated) return undefined;
@@ -1862,6 +2720,14 @@ export function HsiDashboard() {
       ...periodArchive,
       [selectedPeriodKey]: createPeriodEntry(selectedPeriodKey, previous.rows, previous.savedAt, previous.reportHistory),
     };
+    const persistedState: DashboardPersistedState = {
+      dataVersion: seedData.dataVersion,
+      masterHeadersCleared: false,
+      periodArchive: nextArchive,
+      saveSnapshots: nextSnapshots,
+      selectedPeriodKey,
+      updatedAt: previous.savedAt,
+    };
     setRows(previous.rows);
     setSavedAt(previous.savedAt);
     setReportHistory(previous.reportHistory);
@@ -1870,20 +2736,8 @@ export function HsiDashboard() {
     setMasterHeadersCleared(false);
     setDirty(false);
     setAutoSaveStatus("Kembali ke save sebelumnya");
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(previous.rows));
-    if (previous.savedAt) {
-      window.localStorage.setItem(SAVED_AT_KEY, previous.savedAt);
-    } else {
-      window.localStorage.removeItem(SAVED_AT_KEY);
-    }
-    if (previous.reportHistory) {
-      window.localStorage.setItem(REPORT_HISTORY_KEY, JSON.stringify(previous.reportHistory));
-    } else {
-      window.localStorage.removeItem(REPORT_HISTORY_KEY);
-    }
-    window.localStorage.setItem(PERIOD_ARCHIVE_KEY, JSON.stringify(nextArchive));
-    window.localStorage.setItem(SAVE_SNAPSHOTS_KEY, JSON.stringify(nextSnapshots));
-    window.localStorage.setItem(MASTER_HEADERS_CLEARED_KEY, "false");
+    persistDashboardStateLocally(persistedState);
+    syncDashboardState(persistedState, "Save sebelumnya tersinkron ke server");
   }
 
   function selectPeriod(periodKey: string) {
@@ -1911,91 +2765,101 @@ export function HsiDashboard() {
     }
   }
 
-  async function logout() {
-    await fetch("/api/logout", { method: "POST" });
-    router.replace("/login");
-    router.refresh();
+  function updatePeriodFilter(value: DashboardPeriodFilterState) {
+    const normalized = normalizePeriodFilter(value);
+    setPeriodFilter(normalized);
+  }
+
+  function openMasterView() {
+    if (!permissions.canAccessMaster) return;
+    if (!masterUnlockToken) {
+      setMasterUnlockOpen(true);
+      return;
+    }
+    setView("master");
   }
 
   return (
-    <main className="min-h-screen bg-[linear-gradient(180deg,#f8fafc_0%,#eef2f7_48%,#fff7f7_100%)] text-slate-950">
-      <header className="sticky top-0 z-40 border-b border-white/70 bg-white/82 shadow-[0_18px_40px_-34px_rgba(15,23,42,0.7)] backdrop-blur-xl">
+    <main className="min-h-screen bg-[#071426] bg-[radial-gradient(circle_at_90%_8%,rgba(56,189,248,0.16),transparent_32%),radial-gradient(circle_at_8%_24%,rgba(37,99,235,0.12),transparent_28%),linear-gradient(135deg,#061426_0%,#0a1f3b_50%,#07182d_100%)] text-slate-950">
+      <header className="sticky top-0 z-40 border-b border-cyan-300/20 bg-[#071426]/95 bg-[radial-gradient(circle_at_12%_0%,rgba(56,189,248,0.20),transparent_28%),linear-gradient(135deg,#061426_0%,#0a1f3b_54%,#07182d_100%)] shadow-[0_22px_48px_-34px_rgba(0,0,0,0.92)] backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1920px] flex-col gap-3 px-4 py-3 sm:px-6 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-950 text-sm font-bold text-white shadow-[0_12px_26px_-16px_rgba(15,23,42,0.9)]">
-                HSI
+            <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.07] px-2.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-lg bg-white/[0.08] text-sm font-bold text-white shadow-[0_14px_30px_-16px_rgba(56,189,248,0.8)] ring-1 ring-cyan-300/25">
+                <Image
+                  alt="HSI"
+                  className="h-full w-full rounded-lg object-cover"
+                  height={80}
+                  priority
+                  src="/module-covers/hsi-design-card.png"
+                  width={80}
+                />
               </div>
               <div>
-                <p className="text-sm font-semibold text-slate-950">Reporting HSI 2026</p>
-                <p className="text-xs text-slate-500">{hydrated ? `${formatNumber(rows.length)} baris MASTER` : "Memuat data"}</p>
+                <p className="text-sm font-bold uppercase tracking-normal text-white">Reporting HSI 2026</p>
+                <p className="text-xs font-semibold uppercase text-cyan-100/72">{hydrated ? `${formatNumber(rows.length)} BARIS MASTER` : "MEMUAT DATA"}</p>
               </div>
             </div>
-            <button
-              className={`${secondaryButtonClass} xl:hidden`}
-              onClick={logout}
-            >
-              <LogOut className="h-4 w-4" />
-              Logout
-            </button>
           </div>
           <div className="flex min-w-0 flex-1 items-center gap-3 xl:justify-end">
-            <label className="hidden shrink-0 items-center gap-2 rounded-md border border-slate-200/70 bg-white/70 px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm sm:flex">
-              Periode
-              <select
-                className="bg-transparent text-sm font-semibold text-slate-950 outline-none"
-                value={selectedPeriodKey}
-                onChange={(event) => selectPeriod(event.target.value)}
-              >
-                {periodOptions.map((option) => (
-                  <option key={option.periodKey} value={option.periodKey}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <nav className="scrollbar-thin flex min-w-0 flex-1 gap-2 overflow-x-auto xl:flex-none">
-            {navItems.map((item) => {
+            <nav className="scrollbar-thin flex min-w-0 flex-1 gap-1.5 overflow-x-auto rounded-xl border border-white/10 bg-white/[0.08] p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur xl:flex-none">
+            <button
+              onClick={() => router.push("/portal")}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold text-slate-100/85 transition hover:bg-white/12 hover:text-white"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Portal
+            </button>
+            {visibleNavItems.map((item) => {
               const Icon = item.icon;
-              const active = view === item.id;
+              const active = renderView === item.id;
+              const masterLocked = item.id === "master" && !masterUnlockToken;
               return (
                 <button
                   key={item.id}
-                  onClick={() => setView(item.id)}
-                  className={`inline-flex h-10 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold transition ${
+                  onClick={() => {
+                    if (item.id === "master") {
+                      openMasterView();
+                    } else {
+                      setMasterUnlockToken(null);
+                      setView(item.id);
+                    }
+                  }}
+                  className={`inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-semibold transition ${
                     active
-                      ? "bg-slate-950 text-white shadow-[0_14px_28px_-20px_rgba(15,23,42,0.9)]"
-                      : "border border-slate-200/60 bg-white/65 text-slate-700 hover:border-slate-300 hover:bg-white"
+                      ? "bg-white text-[#071426] shadow-[0_16px_30px_-20px_rgba(56,189,248,0.8)]"
+                      : "text-slate-100/85 hover:bg-white/12 hover:text-white"
                   }`}
                 >
                   <Icon className="h-4 w-4" />
-                  {item.label}
+                  <span>{item.label}</span>
+                  {masterLocked && <LockKeyhole aria-label="Master terkunci" className="h-3.5 w-3.5 opacity-70" />}
                 </button>
               );
             })}
             </nav>
-            <div className="hidden shrink-0 items-center gap-2 xl:flex">
-              <StatusPill>Cut-off {report.cutoffLabel}</StatusPill>
-              <button
-                className={secondaryButtonClass}
-                onClick={logout}
-              >
-                <LogOut className="h-4 w-4" />
-                Logout
-              </button>
-            </div>
           </div>
         </div>
       </header>
 
       <div className="mx-auto max-w-[1920px] px-3 py-5 sm:px-5 lg:px-6">
-          {view === "home" && <DashboardHome report={report} />}
-          {view === "master" && (
+          {renderView === "home" && (
+            <DashboardHome
+              onPeriodChange={selectPeriod}
+              onPeriodFilterChange={updatePeriodFilter}
+              periodOptions={periodOptions}
+              periodFilter={periodFilter}
+              periodValidationMessage={filteredReportState.validationMessage}
+              report={displayReport}
+              selectedPeriodKey={selectedPeriodKey}
+            />
+          )}
+          {renderView === "master" && permissions.canAccessMaster && (
             <MasterPage
               autoSaveStatus={autoSaveStatus}
               canGoBack={(saveSnapshots[selectedPeriodKey] ?? []).length > 0}
               headersCleared={masterHeadersCleared}
-              periodLabel={report.periodLabel}
+              periodLabel={displayReport.periodLabel}
               rows={rows}
               savedAt={savedAt}
               setHeadersCleared={setMasterHeadersCleared}
@@ -2009,9 +2873,21 @@ export function HsiDashboard() {
               onClear={clearRows}
             />
           )}
-          {view === "report" && <ReportPage report={report} variant="sementara" />}
-          {view === "stf" && <ReportPage report={report} variant="stf" />}
+          {renderView === "report" && <ReportPage report={displayReport} variant="sementara" />}
+          {renderView === "stf" && <ReportPage report={displayReport} variant="stf" />}
       </div>
+      <MasterUnlockModal
+        open={masterUnlockOpen}
+        theme="hsi"
+        onClose={() => setMasterUnlockOpen(false)}
+        onUnlocked={(token) => {
+          setMasterUnlockToken(token);
+          setMasterUnlockOpen(false);
+          setView("master");
+        }}
+      />
     </main>
   );
 }
+
+
