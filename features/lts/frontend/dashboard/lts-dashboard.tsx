@@ -255,25 +255,25 @@ function normalizePersistedDataset(datasetKey: LtsDatasetKey, value: Partial<Lts
   };
 }
 
-function seedDatasets() {
-  const output: DatasetState = {};
+function initialSeedArchive() {
+  // Seed boleh berisi lebih dari satu periode per dataset (mis. CAPS Oktober + September).
+  const archive: DatasetArchive = {};
   for (const item of ltsSeedData.datasets) {
     const datasetKey = item.datasetKey as LtsDatasetKey;
-    output[datasetKey] = {
-      datasetKey,
-      fileName: item.fileName,
-      headers: [...item.headers],
-      periodKey: item.periodKey,
-      rows: item.rows.map((row) => [...row]) as LtsMasterRow[],
-      rowCount: item.rowCount,
-      uploadedAt: item.uploadedAt,
+    archive[datasetKey] = {
+      ...(archive[datasetKey] ?? {}),
+      [item.periodKey]: {
+        datasetKey,
+        fileName: item.fileName,
+        headers: [...item.headers],
+        periodKey: item.periodKey,
+        rows: item.rows.map((row) => [...row]) as LtsMasterRow[],
+        rowCount: item.rowCount,
+        uploadedAt: item.uploadedAt,
+      },
     };
   }
-  return output;
-}
-
-function initialSeedArchive() {
-  return archiveFromDatasets(seedDatasets());
+  return archive;
 }
 
 function archiveFromDatasets(datasets: DatasetState) {
@@ -376,11 +376,10 @@ function combineDatasetsForRange(archive: DatasetArchive, filter: DashboardPerio
   for (const key of Object.keys(ltsDatasetDefinitions) as LtsDatasetKey[]) {
     let entries = periodKeys.map((periodKey) => archive[key]?.[periodKey]).filter(Boolean) as LtsUploadedDataset[];
     if (key === "caps") {
-      // CAPS_MASTER di Excel menampung seluruh baris NAL yang di-paste (mis. September + Oktober),
-      // jadi CAPS dihitung kumulatif sampai periode akhir. Data bawaan (seed) tidak ikut kecuali periodenya dipilih langsung.
-      const seedFiles = new Set(ltsSeedData.datasets.filter((item) => item.datasetKey === "caps").map((item) => item.fileName));
+      // CAPS_MASTER di Excel menampung seluruh baris NAL yang di-paste (mis. September + Oktober) dan
+      // COUNTIFS-nya tidak menyaring periode, jadi CAPS dihitung kumulatif sampai periode akhir.
       entries = Object.entries(archive.caps ?? {})
-        .filter(([periodKey, dataset]) => dataset && (periodKeys.includes(periodKey) || (periodKey <= normalized.endMonth && !seedFiles.has(dataset.fileName))))
+        .filter(([periodKey, dataset]) => dataset && periodKey <= normalized.endMonth)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([, dataset]) => dataset as LtsUploadedDataset);
     }
