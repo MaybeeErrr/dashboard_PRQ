@@ -259,11 +259,12 @@ function normalizeHotda(value: unknown) {
 }
 
 function periodColumnsForDataset(datasetKey: LtsDatasetKey) {
+  // Kolom berformat YYYYMM dicoba lebih dulu; nama bulan (NPER) dan tanggal dipakai sebagai cadangan.
   return datasetKey === "sales"
-    ? ["NPER", "PERIOD", "PERIOD_U", "LAST_UPDATED_DATE"]
+    ? ["PERIOD", "PERIOD_U", "NPER", "LAST_UPDATED_DATE"]
     : datasetKey === "caps"
       ? ["PERIODE", "PERIODE_CT0_BAYAR"]
-      : ["Nper", "TAHUN", "LAST_PERIODE"];
+      : ["Nper", "LAST_PERIODE"];
 }
 
 export function periodLabelFromLtsPeriodKey(periodKey: string) {
@@ -274,27 +275,53 @@ export function periodLabelFromLtsPeriodKey(periodKey: string) {
   return `${MONTHS[monthIndex]} ${match[1]}`;
 }
 
-function periodKey(value: unknown) {
-  if (value instanceof Date) {
-    const month = String(value.getMonth() + 1).padStart(2, "0");
-    return `${value.getFullYear()}${month}`;
-  }
+// Nama bulan Indonesia dan Inggris -> nomor bulan (export Tableau memakai "October", dst).
+const MONTH_NUMBER_BY_NAME: Record<string, number> = {
+  JANUARI: 1, JANUARY: 1, JAN: 1,
+  FEBRUARI: 2, FEBRUARY: 2, FEB: 2,
+  MARET: 3, MARCH: 3, MAR: 3,
+  APRIL: 4, APR: 4,
+  MEI: 5, MAY: 5,
+  JUNI: 6, JUNE: 6, JUN: 6,
+  JULI: 7, JULY: 7, JUL: 7,
+  AGUSTUS: 8, AUGUST: 8, AGU: 8, AUG: 8,
+  SEPTEMBER: 9, SEPT: 9, SEP: 9,
+  OKTOBER: 10, OCTOBER: 10, OKT: 10, OCT: 10,
+  NOVEMBER: 11, NOV: 11,
+  DESEMBER: 12, DECEMBER: 12, DES: 12, DEC: 12,
+};
+
+function periodKey(value: unknown, yearHint: number) {
+  const format = (year: number, month: number) => (month >= 1 && month <= 12 ? `${year}${String(month).padStart(2, "0")}` : "");
+  if (value instanceof Date) return format(value.getFullYear(), value.getMonth() + 1);
   const text = String(value ?? "").trim();
   if (!text) return "";
-  const sixDigit = text.match(/^(\d{4})(\d{2})/);
-  if (sixDigit) return `${sixDigit[1]}${sixDigit[2]}`;
-  const monthIndex = MONTHS.findIndex((month) => month === text.toUpperCase());
-  if (monthIndex >= 0) return `2026${String(monthIndex + 1).padStart(2, "0")}`;
+  const sixDigit = text.match(/^(\d{4})(\d{2})(?!\d)/);
+  if (sixDigit) return format(Number(sixDigit[1]), Number(sixDigit[2]));
+  const isoDate = text.match(/^(\d{4})-(\d{2})/);
+  if (isoDate) return format(Number(isoDate[1]), Number(isoDate[2]));
+  const named = text.toUpperCase().match(/^([A-Z]+)\s*(\d{4})?$/);
+  if (named && MONTH_NUMBER_BY_NAME[named[1]]) return format(named[2] ? Number(named[2]) : yearHint, MONTH_NUMBER_BY_NAME[named[1]]);
   return "";
 }
 
 export function periodKeyFromLtsRows(datasetKey: LtsDatasetKey, headers: string[], rows: LtsMasterRow[]) {
-  const periodColumns = periodColumnsForDataset(datasetKey);
+  const columns = periodColumnsForDataset(datasetKey)
+    .map((candidate) => findColumn(headers, [candidate]))
+    .filter((index) => index >= 0);
+  const yearColumn = findColumn(headers, ["TAHUN"]);
   const values = new Map<string, number>();
   for (const row of rows.slice(0, 500)) {
-    const value = getCell(row, headers, periodColumns);
-    const key = periodKey(value);
-    if (key) values.set(key, (values.get(key) ?? 0) + 1);
+    const yearValue = yearColumn >= 0 ? toNumber(row[yearColumn], Number.NaN) : Number.NaN;
+    const yearHint = yearValue >= 2000 && yearValue <= 2100 ? yearValue : new Date().getFullYear();
+    // Pakai kolom pertama yang bisa dibaca (bukan sekadar kolom pertama yang ada).
+    for (const index of columns) {
+      const key = periodKey(row[index], yearHint);
+      if (key) {
+        values.set(key, (values.get(key) ?? 0) + 1);
+        break;
+      }
+    }
   }
   return [...values.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "202609";
 }

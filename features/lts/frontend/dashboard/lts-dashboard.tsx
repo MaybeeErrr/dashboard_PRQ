@@ -374,7 +374,16 @@ function combineDatasetsForRange(archive: DatasetArchive, filter: DashboardPerio
   const periodKeys = monthRangeKeys(normalized.startMonth, normalized.endMonth);
   const datasets: DatasetState = {};
   for (const key of Object.keys(ltsDatasetDefinitions) as LtsDatasetKey[]) {
-    const entries = periodKeys.map((periodKey) => archive[key]?.[periodKey]).filter(Boolean) as LtsUploadedDataset[];
+    let entries = periodKeys.map((periodKey) => archive[key]?.[periodKey]).filter(Boolean) as LtsUploadedDataset[];
+    if (key === "caps") {
+      // CAPS_MASTER di Excel menampung seluruh baris NAL yang di-paste (mis. September + Oktober),
+      // jadi CAPS dihitung kumulatif sampai periode akhir. Data bawaan (seed) tidak ikut kecuali periodenya dipilih langsung.
+      const seedFiles = new Set(ltsSeedData.datasets.filter((item) => item.datasetKey === "caps").map((item) => item.fileName));
+      entries = Object.entries(archive.caps ?? {})
+        .filter(([periodKey, dataset]) => dataset && (periodKeys.includes(periodKey) || (periodKey <= normalized.endMonth && !seedFiles.has(dataset.fileName))))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, dataset]) => dataset as LtsUploadedDataset);
+    }
     if (entries.length === 0) continue;
     const first = entries[0];
     datasets[key] = {
