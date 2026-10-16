@@ -126,24 +126,20 @@ const WITEL_ORDER = [
 const HOTDA_GROUPS: { label: string; coordinator: string; members: string[] }[] = [
   { label: "BANTUL", coordinator: "MURTADO", members: ["BANTUL", "GUNUNG KIDUL"] },
   { label: "CILACAP", coordinator: "P. CH. DWI PRASETYO M.S.", members: ["CILACAP"] },
-  { label: "KEBUMEN", coordinator: "ODHY ANUGRAH AGUSTA", members: ["KEBUMEN", "PURWOREJO"] },
+  { label: "KEBUMEN", coordinator: "RISAL RAYADI", members: ["KEBUMEN", "PURWOREJO"] },
   { label: "MAGELANG", coordinator: "TRINIL ANJAR LESTARI, ST", members: ["MAGELANG", "MUNTILAN"] },
   { label: "PURBALINGGA", coordinator: "IVAN FERNALDY", members: ["PURBALINGGA", "BANJARNEGARA"] },
   { label: "PURWOKERTO", coordinator: "YOGI BAHTIAR, ST", members: ["PURWOKERTO"] },
   { label: "WONOSOBO", coordinator: "YOGANDA RAGIL PRANATA", members: ["WONOSOBO", "TEMANGGUNG"] },
-  { label: "YOGYAKARTA", coordinator: "HERU SETIAWAN", members: ["YOGYAKARTA", "INNER - YOGYA JATENG SELATAN", "SLEMAN"] },
+  { label: "YOGYAKARTA", coordinator: "INTAN KURNIA IMASTUTI, S.T, M.M", members: ["INNER - YOGYA JATENG SELATAN", "SLEMAN"] },
 ];
 
-// Filter produk disamakan dengan rumus xlsx (sheet "Untuk manggil data (3 versi)"):
-// - SALES  : kolom PRODUK, WMS = {WMS, WMS FIT, WMS LITE, WMS RESELLER}, HSI = {HSI BASIC/BISNIS (+MTC), HSI RESELLER}
-// - CAPS   : kolom L_PRODUK, WMS = "WMS" saja, HSI = {HSI BASIC, HSI BISNIS, HSI RESELLER}
-// - CT0    : kolom Produk, WMS = "Wifi Manage Service", HSI = "Internet" (persis sama)
+// Daftar produk persis seperti rumus di sheet "Untuk manggil data (3 versi)".
 const WMS_SALES_PRODUCTS = new Set(["WMS", "WMS FIT", "WMS LITE", "WMS RESELLER"]);
-const HSI_SALES_PRODUCTS = new Set(["HSI BASIC", "HSI BASIC MTC", "HSI BISNIS", "HSI BISNIS MTC", "HSI RESELLER"]);
 const WMS_CAPS_PRODUCTS = new Set(["WMS"]);
-const HSI_CAPS_PRODUCTS = new Set(["HSI BASIC", "HSI BISNIS", "HSI RESELLER"]);
 const WMS_CT0_PRODUCTS = new Set(["WIFI MANAGE SERVICE"]);
-const HSI_CT0_PRODUCTS = new Set(["INTERNET"]);
+const HSI_SALES_PRODUCTS = new Set(["HSI BASIC", "HSI BASIC MTC", "HSI BISNIS", "HSI BISNIS MTC", "HSI RESELLER"]);
+const HSI_CAPS_PRODUCTS = new Set(["HSI BASIC", "HSI BISNIS", "HSI RESELLER"]);
 
 const WITEL_CHURN: Record<string, number> = {
   BALI: 51,
@@ -212,10 +208,7 @@ function getCell(row: LtsMasterRow, headers: string[], candidates: string[]) {
 function toNumber(value: unknown, fallback = 0) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "boolean") return value ? 1 : 0;
-  const raw = String(value ?? "").trim();
-  // Angka biasa ("1", "1.0", "-2.5") dibaca apa adanya; sebelumnya "1.0" salah terbaca 10.
-  if (/^-?\d+(\.\d+)?$/.test(raw)) return Number(raw);
-  const text = raw.replace(/\./g, "").replace(",", ".").trim();
+  const text = String(value ?? "").replace(/\./g, "").replace(",", ".").trim();
   if (!text) return fallback;
   const parsed = Number(text);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -231,7 +224,7 @@ function hasAnyColumn(headers: string[], candidates: string[]) {
   return findColumn(headers, candidates) >= 0;
 }
 
-// xlsx: COUNTIFS(..., "Belum Bayar") -> kecocokan penuh, bukan "mengandung".
+// COUNTIFS(..., "Belum Bayar") = kecocokan penuh, bukan "mengandung".
 function isBelumBayar(value: unknown) {
   return normalizeLabel(value) === "BELUM BAYAR";
 }
@@ -240,9 +233,14 @@ function productMatchesMode(tabKey: LtsReportTabKey, source: LtsDatasetKey, prod
   if (tabKey === "all") return true;
   const normalized = normalizeLabel(product);
   if (!hasProductColumn && source === "caps" && tabKey === "wms") return true;
-  if (source === "caps") return (tabKey === "wms" ? WMS_CAPS_PRODUCTS : HSI_CAPS_PRODUCTS).has(normalized);
-  if (source === "ct0") return (tabKey === "wms" ? WMS_CT0_PRODUCTS : HSI_CT0_PRODUCTS).has(normalized);
-  return (tabKey === "wms" ? WMS_SALES_PRODUCTS : HSI_SALES_PRODUCTS).has(normalized);
+  if (tabKey === "wms") {
+    if (source === "caps") return WMS_CAPS_PRODUCTS.has(normalized);
+    if (source === "ct0") return WMS_CT0_PRODUCTS.has(normalized);
+    return WMS_SALES_PRODUCTS.has(normalized);
+  }
+  if (source === "caps") return HSI_CAPS_PRODUCTS.has(normalized);
+  if (source === "ct0") return normalized === "INTERNET";
+  return HSI_SALES_PRODUCTS.has(normalized);
 }
 
 function normalizeWitel(value: unknown) {
@@ -255,15 +253,14 @@ function normalizeHotda(value: unknown) {
   const normalized = stripTerritoryCode(value);
   if (!normalized) return "";
   for (const group of HOTDA_GROUPS) {
-    if (group.members.includes(normalized) || normalized === group.label) return group.label;
+    if (group.members.includes(normalized)) return group.label;
   }
   return "";
 }
 
 function periodColumnsForDataset(datasetKey: LtsDatasetKey) {
-  // Kolom angka YYYYMM didahulukan; nama bulan (NPER) hanya cadangan.
   return datasetKey === "sales"
-    ? ["PERIOD", "PERIOD_U", "NPER", "LAST_UPDATED_DATE"]
+    ? ["NPER", "PERIOD", "PERIOD_U", "LAST_UPDATED_DATE"]
     : datasetKey === "caps"
       ? ["PERIODE", "PERIODE_CT0_BAYAR"]
       : ["Nper", "TAHUN", "LAST_PERIODE"];
@@ -286,14 +283,8 @@ function periodKey(value: unknown) {
   if (!text) return "";
   const sixDigit = text.match(/^(\d{4})(\d{2})/);
   if (sixDigit) return `${sixDigit[1]}${sixDigit[2]}`;
-  const isoDate = text.match(/^(\d{4})-(\d{2})-\d{2}/);
-  if (isoDate) return `${isoDate[1]}${isoDate[2]}`;
-  // Nama bulan bahasa Indonesia ATAU Inggris ("October" sebelumnya tidak dikenali -> periode salah).
-  const upper = text.toUpperCase();
-  const monthIndex = MONTHS.findIndex((month) => month === upper);
-  const englishIndex = CUTOFF_MONTHS.findIndex((month) => month.toUpperCase() === upper);
-  const index = monthIndex >= 0 ? monthIndex : englishIndex;
-  if (index >= 0) return `${new Date().getFullYear()}${String(index + 1).padStart(2, "0")}`;
+  const monthIndex = MONTHS.findIndex((month) => month === text.toUpperCase());
+  if (monthIndex >= 0) return `2026${String(monthIndex + 1).padStart(2, "0")}`;
   return "";
 }
 
@@ -301,12 +292,8 @@ export function periodKeyFromLtsRows(datasetKey: LtsDatasetKey, headers: string[
   const periodColumns = periodColumnsForDataset(datasetKey);
   const values = new Map<string, number>();
   for (const row of rows.slice(0, 500)) {
-    // Coba setiap kolom periode berurutan sampai ada yang bisa dibaca.
-    let key = "";
-    for (const column of periodColumns) {
-      key = periodKey(getCell(row, headers, [column]));
-      if (key) break;
-    }
+    const value = getCell(row, headers, periodColumns);
+    const key = periodKey(value);
     if (key) values.set(key, (values.get(key) ?? 0) + 1);
   }
   return [...values.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "202609";
@@ -350,45 +337,39 @@ function salesMetricForRow(tabKey: LtsReportTabKey, headers: string[], row: LtsM
   const product = getCell(row, headers, ["PRODUK", "PRODUCT", "TYPE_LAYANAN", "L_PRODUK"]);
   const hasProductColumn = hasAnyColumn(headers, ["PRODUK", "PRODUCT", "TYPE_LAYANAN", "L_PRODUK"]);
   if (!productMatchesMode(tabKey, "sales", product, hasProductColumn)) return blankAccumulator();
-  // xlsx: tab ALL = SUM(Jml_Sales); tab HSI/WMS = COUNTIFS (jumlah baris, 1 per baris).
-  const sales = tabKey === "all" ? rowValue(row, headers, ["Jml_Sales"], 0) : 1;
+  // ALL & WMS: SUM(Jml_Sales). HSI: COUNTIFS (1 baris = 1).
+  const sales = tabKey === "hsi" ? 1 : rowValue(row, headers, ["Jml_Sales", "COUNT_SID", "Number of Records"], 0);
   return { sales, ct0: 0, caps: 0, churn: 0 };
 }
 
 function ct0MetricForRow(tabKey: LtsReportTabKey, headers: string[], row: LtsMasterRow): Accumulator {
-  if (!isBelumBayar(getCell(row, headers, ["Bayar Desc"]))) return blankAccumulator();
-  const product = getCell(row, headers, ["Produk"]);
-  const hasProductColumn = hasAnyColumn(headers, ["Produk"]);
+  if (!isBelumBayar(getCell(row, headers, ["Bayar Desc", "STATUS_PAYMENT"]))) return blankAccumulator();
+  const product = getCell(row, headers, ["Produk", "PRODUK"]);
+  const hasProductColumn = hasAnyColumn(headers, ["Produk", "PRODUK"]);
   if (!productMatchesMode(tabKey, "ct0", product, hasProductColumn)) return blankAccumulator();
-  // xlsx: COUNTIFS -> hitung jumlah baris (bukan menjumlahkan kolom JML LYN).
+  // COUNTIFS pada baris "Belum Bayar": setiap baris dihitung 1.
   return { sales: 0, ct0: 1, caps: 0, churn: 0 };
 }
 
 function capsMetricForRow(tabKey: LtsReportTabKey, headers: string[], row: LtsMasterRow): Accumulator {
-  // xlsx: COUNTIFS(SSL_DO, 1) -> baris dengan SSL_DO tepat 1, dihitung per baris.
+  // COUNTIFS(SSL_DO, 1): hanya baris dengan SSL_DO = 1 yang dihitung 1.
   if (rowValue(row, headers, ["SSL_DO"], 0) !== 1) return blankAccumulator();
+  const caps = 1;
   const product = getCell(row, headers, ["L_PRODUK", "PRODUK", "PRODUCT"]);
   const hasProductColumn = hasAnyColumn(headers, ["L_PRODUK", "PRODUK", "PRODUCT"]);
   if (!productMatchesMode(tabKey, "caps", product, hasProductColumn)) return blankAccumulator();
-  return { sales: 0, ct0: 0, caps: 1, churn: 0 };
+  return { sales: 0, ct0: 0, caps, churn: 0 };
 }
 
 function scopeLabel(datasetKey: LtsDatasetKey, scope: LtsScope, headers: string[], row: LtsMasterRow) {
   if (scope === "witel") {
     if (datasetKey === "sales") return normalizeWitel(getCell(row, headers, ["WITEL"]));
-    // xlsx CAPS memakai kolom "WITEL (NEW_TERRITORY)" (kolom AB), bukan L_WITEL.
-    if (datasetKey === "caps") return normalizeWitel(getCell(row, headers, ["WITEL (NEW_TERRITORY)", "L_WITEL", "TWITEL"]));
+    if (datasetKey === "caps") return normalizeWitel(getCell(row, headers, ["L_WITEL", "WITEL (NEW_TERRITORY)", "TWITEL"]));
     return normalizeWitel(getCell(row, headers, ["Witel", "Witel Bill", "OLD_WITEL"]));
   }
   if (datasetKey === "sales") return normalizeHotda(getCell(row, headers, ["TELKOM_DAERAH", "TELDA_NCX", "CTELDA"]));
   if (datasetKey === "caps") return normalizeHotda(getCell(row, headers, ["TELKOM_DAERAH"]));
-  return normalizeHotda(getCell(row, headers, ["Datel"]));
-}
-
-// xlsx: SALES untuk WITEL "YOGYA JATENG SELATAN" hanya menghitung baris dengan TELKOM_DAERAH terisi (TELKOM_DAERAH <> "").
-function isExcludedFromWitelSales(datasetKey: LtsDatasetKey, scope: LtsScope, label: string, headers: string[], row: LtsMasterRow) {
-  if (datasetKey !== "sales" || scope !== "witel" || label !== "YOGYA JATENG SELATAN") return false;
-  return String(getCell(row, headers, ["TELKOM_DAERAH"]) ?? "").trim() === "";
+  return normalizeHotda(getCell(row, headers, ["Datel", "Sto Desc"]));
 }
 
 function rankRows(rows: LtsReportRow[], selector: (row: LtsReportRow) => number, setter: (row: LtsReportRow, rank: number) => void) {
@@ -420,7 +401,7 @@ function addDatasetRows(targets: Map<string, Accumulator>, scope: LtsScope, data
     const label = scopeLabel(datasetKey, scope, dataset.headers, row);
     const target = targets.get(label);
     if (!target) continue;
-    if (isExcludedFromWitelSales(datasetKey, scope, label, dataset.headers, row)) continue;
+    if (datasetKey === "sales" && scope === "witel" && label === "YOGYA JATENG SELATAN" && normalizeLabel(getCell(row, dataset.headers, ["TELKOM_DAERAH"])) === "") continue;
     const metric =
       datasetKey === "sales"
         ? salesMetricForRow(tabKey, dataset.headers, row)
@@ -434,6 +415,8 @@ function addDatasetRows(targets: Map<string, Accumulator>, scope: LtsScope, data
 function buildReportRows(scope: LtsScope, tabKey: LtsReportTabKey, datasets: LtsReportSourceDatasets) {
   const labels = scope === "witel" ? WITEL_ORDER : HOTDA_GROUPS.map((group) => group.label);
   const coordinators = new Map(HOTDA_GROUPS.map((group) => [group.label, group.coordinator]));
+  // Sheet "LTS HOTDA (HSI only)" menulis koordinator KEBUMEN = ODHY ANUGRAH AGUSTA.
+  if (tabKey === "hsi") coordinators.set("KEBUMEN", "ODHY ANUGRAH AGUSTA");
   const grouped = new Map(labels.map((label) => [label, { ...blankAccumulator(), churn: churnForLabel(scope, label) }]));
 
   addDatasetRows(grouped, scope, "sales", datasets.sales, tabKey);

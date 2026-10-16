@@ -141,6 +141,12 @@ function formatDecimal(value: number | null | undefined) {
   return new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2 }).format(value);
 }
 
+// Excel menampilkan CT0/Sales, CAPS/Sales, dan Score dengan format 0.00% (mis. 190,32%).
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "";
+  return `${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 2, minimumFractionDigits: 2 }).format(value * 100)}%`;
+}
+
 function formatSavedAt(value: string | null | undefined) {
   if (!value) return "Belum pernah diupload";
   return new Intl.DateTimeFormat("id-ID", {
@@ -577,7 +583,7 @@ async function createLtsReportPng(report: LtsComputedReport, timestamp: Date) {
   function textValue(row: LtsReportRow, key: string) {
     if (key === "label") return row.label;
     if (key === "coordinator") return row.coordinator ?? "";
-    if (key === "ct0Ratio" || key === "capsRatio" || key === "score") return formatDecimal(Number(row[key as keyof LtsReportRow]));
+    if (key === "ct0Ratio" || key === "capsRatio" || key === "score") return formatPercent(Number(row[key as keyof LtsReportRow]));
     if (key === "ct0Rank" || key === "capsRank" || key === "scoreRank" || key === "capsRankOnly") return formatNumber(row[key as keyof LtsReportRow] as number | null);
     return formatNumber(row[key as keyof LtsReportRow] as number);
   }
@@ -777,7 +783,7 @@ function MetricCard({
 type LtsWilayahFilter = "all-witel" | "all-hotda" | `witel:${string}` | `hotda:${string}`;
 
 function formatRatio(value: number | null | undefined) {
-  return formatDecimal(value);
+  return formatPercent(value);
 }
 
 function chartLabelNumber(value: unknown) {
@@ -785,7 +791,7 @@ function chartLabelNumber(value: unknown) {
 }
 
 function chartLabelDecimal(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "";
+  return typeof value === "number" && Number.isFinite(value) ? formatPercent(value) : "";
 }
 
 function tooltipValue(value: unknown) {
@@ -1326,12 +1332,12 @@ function ReportDataTable({ table }: { table: LtsReportTable }) {
                   {showCoordinator && <td className={`border-b border-r border-violet-100/80 px-3 py-2 ${total ? "bg-[#160d24] text-white" : `${rowBackground} text-slate-700`}`}>{row.coordinator ?? ""}</td>}
                   <td className={`border-b border-r border-violet-100/80 px-2 py-2 text-right ${total ? "bg-[#160d24] text-white" : "bg-[#f3edff] font-semibold text-[#321653]"}`}>{formatNumber(row.sales)}</td>
                   <td className="border-b border-r border-indigo-100 bg-indigo-50/45 px-2 py-2 text-right">{formatNumber(row.ct0)}</td>
-                  <td className="border-b border-r border-indigo-100 bg-indigo-50/80 px-2 py-2 text-right font-semibold text-indigo-800">{formatDecimal(row.ct0Ratio)}</td>
+                  <td className="border-b border-r border-indigo-100 bg-indigo-50/80 px-2 py-2 text-right font-semibold text-indigo-800">{formatPercent(row.ct0Ratio)}</td>
                   <td className="border-b border-r border-indigo-100 bg-indigo-50/45 px-2 py-2 text-center">{row.ct0Rank ? <span className="inline-flex min-w-8 justify-center rounded-full bg-indigo-900 px-2 py-0.5 text-white shadow-sm">{row.ct0Rank}</span> : ""}</td>
                   <td className="border-b border-r border-cyan-100 bg-cyan-50/45 px-2 py-2 text-right">{formatNumber(row.caps)}</td>
-                  <td className="border-b border-r border-cyan-100 bg-cyan-50/80 px-2 py-2 text-right font-semibold text-cyan-800">{formatDecimal(row.capsRatio)}</td>
+                  <td className="border-b border-r border-cyan-100 bg-cyan-50/80 px-2 py-2 text-right font-semibold text-cyan-800">{formatPercent(row.capsRatio)}</td>
                   <td className="border-b border-r border-cyan-100 bg-cyan-50/45 px-2 py-2 text-center">{row.capsRank ? <span className="inline-flex min-w-8 justify-center rounded-full bg-cyan-900 px-2 py-0.5 text-white shadow-sm">{row.capsRank}</span> : ""}</td>
-                  <td className="border-b border-r border-violet-100 bg-violet-50/90 px-2 py-2 text-right font-bold text-violet-900">{formatDecimal(row.score)}</td>
+                  <td className="border-b border-r border-violet-100 bg-violet-50/90 px-2 py-2 text-right font-bold text-violet-900">{formatPercent(row.score)}</td>
                   <td className="border-b border-r border-violet-100 bg-violet-50/50 px-2 py-2 text-center">{row.scoreRank ? <span className="inline-flex min-w-8 justify-center rounded-full bg-violet-950 px-2 py-0.5 text-white shadow-sm">{row.scoreRank}</span> : ""}</td>
                   {!showCoordinator && <td className="border-b border-r border-amber-100 bg-amber-50/70 px-2 py-2 text-center">{row.capsRankOnly ? <span className="inline-flex min-w-8 justify-center rounded-full bg-amber-800 px-2 py-0.5 text-white shadow-sm">{row.capsRankOnly}</span> : ""}</td>}
                   <td className="border-b border-r border-amber-100 bg-amber-50/60 px-2 py-2 text-right text-amber-900">{formatNumber(row.churn)}</td>
