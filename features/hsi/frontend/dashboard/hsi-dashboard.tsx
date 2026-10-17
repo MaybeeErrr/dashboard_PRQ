@@ -1773,7 +1773,7 @@ function MasterPage({
   setHeadersCleared: React.Dispatch<React.SetStateAction<boolean>>;
   setRows: React.Dispatch<React.SetStateAction<MasterRow[]>>;
   onBack: () => void;
-  onSave: (options?: { automated?: boolean; pushSnapshot?: boolean }) => void;
+  onSave: (options?: { automated?: boolean; pushSnapshot?: boolean; rows?: MasterRow[] }) => void;
   onClear: () => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1823,6 +1823,8 @@ function MasterPage({
       setImportError(null);
       setHeadersCleared(false);
       setRows(importedRows);
+      // Langsung simpan & tampilkan di dashboard, tanpa menunggu auto-save 3 menit.
+      onSave({ rows: importedRows });
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (error) {
       setImportError(error instanceof Error ? error.message : "File Excel tidak bisa dibaca.");
@@ -2646,10 +2648,13 @@ export function HsiDashboard({ permissions = fullAccessPermissions }: { permissi
     [periodArchive, savedAt, selectedPeriodKey],
   );
 
-  const saveRows = useCallback((options: { automated?: boolean; pushSnapshot?: boolean } = {}) => {
+  const saveRows = useCallback((options: { automated?: boolean; pushSnapshot?: boolean; rows?: MasterRow[] } = {}) => {
     const timestamp = new Date().toISOString();
-    const periodKey = detectPeriodKey(rows, selectedPeriodKey || currentJakartaPeriodKey());
-    const currentReport = computeReport(rows, timestamp, periodKey);
+    // Saat upload Excel, state `rows` belum terbarui di closure ini, jadi pakai baris hasil import langsung.
+    const sourceRows = options.rows ?? rows;
+    const fromImport = Boolean(options.rows);
+    const periodKey = detectPeriodKey(sourceRows, selectedPeriodKey || currentJakartaPeriodKey());
+    const currentReport = computeReport(sourceRows, timestamp, periodKey);
     const nextHistory = mergeReportHistory(reportHistory, currentReport, timestamp);
     const previousEntry = periodArchive[periodKey];
     const shouldPushSnapshot = options.pushSnapshot !== false && Boolean(previousEntry?.savedAt);
@@ -2669,7 +2674,7 @@ export function HsiDashboard({ permissions = fullAccessPermissions }: { permissi
       : saveSnapshots;
     const nextArchive = {
       ...periodArchive,
-      [periodKey]: createPeriodEntry(periodKey, rows, timestamp, nextHistory),
+      [periodKey]: createPeriodEntry(periodKey, sourceRows, timestamp, nextHistory),
     };
     const persistedState: DashboardPersistedState = {
       dataVersion: seedData.dataVersion,
@@ -2686,7 +2691,13 @@ export function HsiDashboard({ permissions = fullAccessPermissions }: { permissi
     setSavedAt(timestamp);
     setSaveSnapshots(nextSnapshots);
     setDirty(false);
-    const status = options.automated ? `Auto-save tersimpan: ${formatJakartaDateTime(new Date(timestamp), true)}` : "Data tersimpan manual";
+    // Upload baru langsung ditampilkan: pindahkan filter periode ke bulan data yang diupload.
+    if (fromImport) setPeriodFilter(defaultPeriodFilter(periodKey));
+    const status = options.automated
+      ? `Auto-save tersimpan: ${formatJakartaDateTime(new Date(timestamp), true)}`
+      : fromImport
+        ? `Upload ${formatNumber(sourceRows.length)} baris (${periodLabelFromKey(periodKey)}) tersimpan`
+        : "Data tersimpan manual";
     setAutoSaveStatus(status);
     syncDashboardState(persistedState, `${status} dan tersinkron ke server`);
   }, [masterHeadersCleared, periodArchive, reportHistory, rows, saveSnapshots, selectedPeriodKey, syncDashboardState]);

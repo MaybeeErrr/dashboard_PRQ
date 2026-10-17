@@ -7,7 +7,10 @@ import {
   ArrowUpRight,
   BarChart3,
   Database,
+  ChevronDown,
   Download,
+  Eye,
+  EyeOff,
   FileSpreadsheet,
   Home,
   Loader2,
@@ -506,7 +509,11 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-async function createLtsReportPng(report: LtsComputedReport, timestamp: Date) {
+type LtsColumnOptions = { churnGap: boolean; rankCaps: boolean };
+const hiddenLtsColumns: LtsColumnOptions = { churnGap: false, rankCaps: false };
+const LTS_COLUMN_STORAGE_KEY = "lts-extra-columns-v1";
+
+async function createLtsReportPng(report: LtsComputedReport, timestamp: Date, columnOptions: LtsColumnOptions = hiddenLtsColumns) {
   const exportTableWidth = 1320;
   const columns = [
     { key: "label", label: "WILAYAH", width: 178 },
@@ -597,7 +604,7 @@ async function createLtsReportPng(report: LtsComputedReport, timestamp: Date) {
   }
 
   function exportColumnsForTable(table: LtsReportTable) {
-    const visibleColumns = columns.filter((column) => !(table.scope === "witel" && column.key === "coordinator") && !(table.scope === "hotda" && column.key === "capsRankOnly"));
+    const visibleColumns = columns.filter((column) => !(table.scope === "witel" && column.key === "coordinator") && !(table.scope === "hotda" && column.key === "capsRankOnly") && !(column.key === "capsRankOnly" && !columnOptions.rankCaps) && !((column.key === "churn" || column.key === "gap") && !columnOptions.churnGap));
     const baseWidth = visibleColumns.reduce((sum, column) => sum + column.width, 0);
     const scaleFactor = exportTableWidth / Math.max(baseWidth, 1);
     return visibleColumns.map((column) => ({
@@ -643,6 +650,7 @@ async function createLtsReportPng(report: LtsComputedReport, timestamp: Date) {
       drawText(label, position.x, y + yOffset + height / 2, position.width, "center", textColor);
     };
     const drawHeaderGroup = (keys: string[], label: string, fill: string) => {
+      if (!columnPositions.has(keys[0])) return;
       const x = groupX(keys[0]);
       const w = groupWidth(keys);
       drawCell(x, y, w, groupHeaderHeight, fill, "#4b356d");
@@ -1281,7 +1289,7 @@ function MasterUploadCard({
   );
 }
 
-function ReportDataTable({ table }: { table: LtsReportTable }) {
+function ReportDataTable({ table, showChurnGap, showRankCaps }: { table: LtsReportTable; showChurnGap: boolean; showRankCaps: boolean }) {
   const allRows = [...table.rows, table.total];
   const showCoordinator = table.scope === "hotda";
   const subHeaders = [
@@ -1293,8 +1301,12 @@ function ReportDataTable({ table }: { table: LtsReportTable }) {
     { label: "Rank", className: "bg-[#ecfeff] text-cyan-800" },
     { label: "Score", className: "bg-[#f5f1ff] text-violet-800" },
     { label: "Rank", className: "bg-[#f5f1ff] text-violet-800" },
-    { label: "Churn", className: "bg-[#fff7ed] text-amber-800" },
-    { label: "Gap", className: "bg-[#ecfdf5] text-emerald-800" },
+    ...(showChurnGap
+      ? [
+          { label: "Churn", className: "bg-[#fff7ed] text-amber-800" },
+          { label: "Gap", className: "bg-[#ecfdf5] text-emerald-800" },
+        ]
+      : []),
   ];
   return (
     <section className={`${glassPanel} overflow-hidden bg-white`}>
@@ -1319,8 +1331,8 @@ function ReportDataTable({ table }: { table: LtsReportTable }) {
               <th colSpan={3} className="sticky top-0 z-20 border-b border-r border-indigo-900/35 bg-[#3730a3] px-2 py-2 text-center font-semibold text-white">Bobot 50% CT0</th>
               <th colSpan={3} className="sticky top-0 z-20 border-b border-r border-cyan-900/35 bg-[#0e7490] px-2 py-2 text-center font-semibold text-white">Bobot 50% CAPS</th>
               <th colSpan={2} className="sticky top-0 z-20 border-b border-r border-violet-900/40 bg-[#5b21b6] px-2 py-2 text-center font-semibold text-white">Score</th>
-              {!showCoordinator && <th rowSpan={2} className="sticky top-0 z-20 w-[92px] border-b border-r border-amber-900/35 bg-[#92400e] px-2 py-2 text-center font-semibold text-white">Rank LTS CAPS</th>}
-              <th colSpan={2} className="sticky top-0 z-20 border-b border-r border-emerald-900/35 bg-[#047857] px-2 py-2 text-center font-semibold text-white">CAPS 27/8</th>
+              {!showCoordinator && showRankCaps && <th rowSpan={2} className="sticky top-0 z-20 w-[92px] border-b border-r border-amber-900/35 bg-[#92400e] px-2 py-2 text-center font-semibold text-white">Rank LTS CAPS</th>}
+              {showChurnGap && <th colSpan={2} className="sticky top-0 z-20 border-b border-r border-emerald-900/35 bg-[#047857] px-2 py-2 text-center font-semibold text-white">CAPS 27/8</th>}
             </tr>
             <tr>
               {subHeaders.map((header, headerIndex) => (
@@ -1347,9 +1359,13 @@ function ReportDataTable({ table }: { table: LtsReportTable }) {
                   <td className="border-b border-r border-cyan-100 bg-cyan-50/45 px-2 py-2 text-center">{row.capsRank ? <span className="inline-flex min-w-8 justify-center rounded-full bg-cyan-900 px-2 py-0.5 text-white shadow-sm">{row.capsRank}</span> : ""}</td>
                   <td className="border-b border-r border-violet-100 bg-violet-50/90 px-2 py-2 text-right font-bold text-violet-900">{formatPercent(row.score)}</td>
                   <td className="border-b border-r border-violet-100 bg-violet-50/50 px-2 py-2 text-center">{row.scoreRank ? <span className="inline-flex min-w-8 justify-center rounded-full bg-violet-950 px-2 py-0.5 text-white shadow-sm">{row.scoreRank}</span> : ""}</td>
-                  {!showCoordinator && <td className="border-b border-r border-amber-100 bg-amber-50/70 px-2 py-2 text-center">{row.capsRankOnly ? <span className="inline-flex min-w-8 justify-center rounded-full bg-amber-800 px-2 py-0.5 text-white shadow-sm">{row.capsRankOnly}</span> : ""}</td>}
-                  <td className="border-b border-r border-amber-100 bg-amber-50/60 px-2 py-2 text-right text-amber-900">{formatNumber(row.churn)}</td>
-                  <td className={`border-b border-r border-violet-100/80 px-2 py-2 text-right font-semibold ${row.gap < 0 ? "bg-rose-50 text-rose-700" : "bg-teal-50 text-teal-700"}`}>{formatNumber(row.gap)}</td>
+                  {!showCoordinator && showRankCaps && <td className="border-b border-r border-amber-100 bg-amber-50/70 px-2 py-2 text-center">{row.capsRankOnly ? <span className="inline-flex min-w-8 justify-center rounded-full bg-amber-800 px-2 py-0.5 text-white shadow-sm">{row.capsRankOnly}</span> : ""}</td>}
+                  {showChurnGap && (
+                    <>
+                      <td className="border-b border-r border-amber-100 bg-amber-50/60 px-2 py-2 text-right text-amber-900">{formatNumber(row.churn)}</td>
+                                        <td className={`border-b border-r border-violet-100/80 px-2 py-2 text-right font-semibold ${row.gap < 0 ? "bg-rose-50 text-rose-700" : "bg-teal-50 text-teal-700"}`}>{formatNumber(row.gap)}</td>
+                    </>
+                  )}
                 </tr>
               );
             })}
@@ -1382,6 +1398,29 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
   const [processingKey, setProcessingKey] = useState<LtsDatasetKey | null>(null);
   const [uploadErrors, setUploadErrors] = useState<Partial<Record<LtsDatasetKey, string>>>({});
   const [downloadState, setDownloadState] = useState<"idle" | "working" | "error">("idle");
+  const [screenColumns, setScreenColumns] = useState<LtsColumnOptions>(hiddenLtsColumns);
+  const [pngColumns, setPngColumns] = useState<LtsColumnOptions>(hiddenLtsColumns);
+  const [pngMenuOpen, setPngMenuOpen] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(LTS_COLUMN_STORAGE_KEY) ?? "null");
+      if (saved?.screen) setScreenColumns({ churnGap: Boolean(saved.screen.churnGap), rankCaps: Boolean(saved.screen.rankCaps) });
+      if (saved?.png) setPngColumns({ churnGap: Boolean(saved.png.churnGap), rankCaps: Boolean(saved.png.rankCaps) });
+    } catch {
+      // Preferensi tampilan hanya kenyamanan; abaikan jika storage tidak tersedia.
+    }
+  }, []);
+
+  function updateColumnPrefs(screen: LtsColumnOptions, png: LtsColumnOptions) {
+    setScreenColumns(screen);
+    setPngColumns(png);
+    try {
+      window.localStorage.setItem(LTS_COLUMN_STORAGE_KEY, JSON.stringify({ png, screen }));
+    } catch {
+      // Abaikan jika storage penuh/diblokir.
+    }
+  }
   const [masterUnlockToken, setMasterUnlockToken] = useState<string | null>(null);
   const [masterUnlockOpen, setMasterUnlockOpen] = useState(false);
   const visibleNavItems = useMemo(
@@ -1512,7 +1551,7 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
     if (!activeReport) return;
     setDownloadState("working");
     try {
-      await createLtsReportPng(activeReport, new Date());
+      await createLtsReportPng(activeReport, new Date(), pngColumns);
       setDownloadState("idle");
     } catch {
       setDownloadState("error");
@@ -1643,10 +1682,39 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
                 <h1 className="mt-1 text-3xl font-bold tracking-normal text-white">{activeReport?.label ?? "LTS REPORT"}</h1>
                 <p className="mt-2 text-sm font-medium text-violet-100/62">{activeReport ? `${activeReport.sourceLabel} | ${activeReport.periodLabel} | ${activeReport.cutoffLabel}` : "Pilih tab dan upload master terkait."}</p>
               </div>
-              <button className={primaryButton} disabled={!activeReport || downloadState === "working"} onClick={downloadPng}>
-                {downloadState === "working" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                PNG Report
-              </button>
+              <div className="relative flex items-center gap-2">
+                <button className={primaryButton} disabled={!activeReport || downloadState === "working"} onClick={downloadPng}>
+                  {downloadState === "working" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                  PNG Report
+                </button>
+                <button
+                  aria-expanded={pngMenuOpen}
+                  aria-label="Opsi kolom PNG"
+                  className="inline-flex h-10 items-center gap-1.5 rounded-lg border border-violet-200/20 bg-white/[0.06] px-3 text-sm font-semibold text-violet-100 transition hover:bg-white/[0.12]"
+                  onClick={() => setPngMenuOpen((open) => !open)}
+                  type="button"
+                >
+                  Opsi kolom
+                  <ChevronDown className={`h-4 w-4 transition ${pngMenuOpen ? "rotate-180" : ""}`} />
+                </button>
+                {pngMenuOpen && (
+                  <>
+                    <button aria-label="Tutup menu" className="fixed inset-0 z-30 cursor-default" onClick={() => setPngMenuOpen(false)} type="button" />
+                    <div className="absolute right-0 top-12 z-40 w-72 rounded-xl border border-violet-200/15 bg-[#14102a] p-3 shadow-2xl">
+                      <p className="px-1 pb-2 text-xs font-semibold uppercase text-violet-200">Kolom di gambar PNG</p>
+                      <label className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium text-white hover:bg-white/[0.07]">
+                        <input checked={pngColumns.rankCaps} className="h-4 w-4 accent-violet-500" onChange={(event) => updateColumnPrefs(screenColumns, { ...pngColumns, rankCaps: event.target.checked })} type="checkbox" />
+                        Rank LTS CAPS
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2 text-sm font-medium text-white hover:bg-white/[0.07]">
+                        <input checked={pngColumns.churnGap} className="h-4 w-4 accent-violet-500" onChange={(event) => updateColumnPrefs(screenColumns, { ...pngColumns, churnGap: event.target.checked })} type="checkbox" />
+                        CAPS 27/8 (Churn &amp; Gap)
+                      </label>
+                      <p className="px-2 pt-2 text-[11px] leading-4 text-violet-100/55">Tidak tergantung tampilan di layar. Dipakai saat menekan PNG Report.</p>
+                    </div>
+                  </>
+                )}
+              </div>
             </section>
             {downloadState === "error" && <div className="rounded-xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm font-semibold text-amber-100">PNG belum berhasil dibuat. Coba tekan PNG Report sekali lagi.</div>}
             <div className="flex flex-wrap gap-2">
@@ -1669,8 +1737,31 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
             </div>
             {activeReport ? (
               <>
-                <ReportDataTable table={activeReport.witel} />
-                <ReportDataTable table={activeReport.hotda} />
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold uppercase text-violet-200/70">Kolom tabel</span>
+                  {([
+                    { key: "rankCaps", label: "Rank LTS CAPS" },
+                    { key: "churnGap", label: "CAPS 27/8 (Churn & Gap)" },
+                  ] as const).map((item) => {
+                    const on = screenColumns[item.key];
+                    return (
+                      <button
+                        aria-pressed={on}
+                        className={`inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-bold uppercase transition ${
+                          on ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-100" : "border-violet-200/12 bg-white/[0.05] text-violet-100/70 hover:bg-white/[0.09] hover:text-white"
+                        }`}
+                        key={item.key}
+                        onClick={() => updateColumnPrefs({ ...screenColumns, [item.key]: !on }, pngColumns)}
+                        type="button"
+                      >
+                        {on ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <ReportDataTable showChurnGap={screenColumns.churnGap} showRankCaps={screenColumns.rankCaps} table={activeReport.witel} />
+                <ReportDataTable showChurnGap={screenColumns.churnGap} showRankCaps={screenColumns.rankCaps} table={activeReport.hotda} />
               </>
             ) : (
               <section className={`${glassPanel} p-8 text-center`}>
