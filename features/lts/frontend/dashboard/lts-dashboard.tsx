@@ -314,6 +314,15 @@ function latestLtsPeriodKey(archive: DatasetArchive) {
   return [...keys].sort().at(-1) ?? "202609";
 }
 
+// Periode awal otomatis = bulan berjalan (YYYYMM) bila datanya sudah ada di arsip;
+// kalau belum ada (mis. awal bulan sebelum master diupload), pakai periode terbaru yang tersedia.
+function defaultLtsPeriodKey(archive: DatasetArchive) {
+  const now = new Date();
+  const currentKey = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const hasCurrent = Object.values(archive).some((datasetArchive) => Boolean(datasetArchive?.[currentKey]));
+  return hasCurrent ? currentKey : latestLtsPeriodKey(archive);
+}
+
 function periodOptionsFromArchive(archive: DatasetArchive) {
   const keys = new Set<string>();
   for (const datasetArchive of Object.values(archive)) {
@@ -1462,13 +1471,13 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
     const shouldRefreshSeed = window.localStorage.getItem(DATA_VERSION_KEY) !== ltsSeedData.dataVersion;
     const stored = readLocalState();
     let currentArchive = seedArchive;
-    let currentPeriodKey = latestLtsPeriodKey(seedArchive);
+    let currentPeriodKey = defaultLtsPeriodKey(seedArchive);
     let currentUpdatedAt: string | null = null;
 
     if (stored) {
       const storedArchive = stored.datasetArchive ?? archiveFromDatasets(stored.datasets);
       const nextArchive = shouldRefreshSeed ? mergeDatasetArchives(storedArchive, seedArchive) : mergeDatasetArchives(seedArchive, storedArchive);
-      const nextPeriodKey = shouldRefreshSeed ? latestLtsPeriodKey(seedArchive) : stored.selectedPeriodKey ?? latestLtsPeriodKey(nextArchive);
+      const nextPeriodKey = defaultLtsPeriodKey(nextArchive);
       currentArchive = nextArchive;
       currentPeriodKey = nextPeriodKey;
       currentUpdatedAt = shouldRefreshSeed ? null : stored.updatedAt;
@@ -1501,7 +1510,7 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
           setDatasetArchive((currentArchive) => {
             const serverArchive = state.datasetArchive ?? archiveFromDatasets(state.datasets);
             const mergedArchive = shouldRefreshSeed ? mergeDatasetArchives(serverArchive, currentArchive) : mergeDatasetArchives(currentArchive, serverArchive);
-            const nextPeriodKey = shouldRefreshSeed ? currentPeriodKey : state.selectedPeriodKey ?? latestLtsPeriodKey(mergedArchive);
+            const nextPeriodKey = defaultLtsPeriodKey(mergedArchive);
             setSelectedPeriodKey(nextPeriodKey);
             setPeriodFilter(defaultPeriodFilter(nextPeriodKey));
             setDatasets(activeDatasetsForPeriod(mergedArchive, nextPeriodKey));
@@ -1556,6 +1565,24 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
       setDownloadState("idle");
     } catch {
       setDownloadState("error");
+    }
+  }
+
+  // Dipakai filter periode di halaman Report LTS. Report dihitung dari periodFilter, jadi filter
+  // tidak direset (Month Range / Date Range / YTD tetap utuh); periode jangkar hanya disimpan.
+  function changeReportPeriodFilter(value: DashboardPeriodFilterState) {
+    const normalized = normalizeLtsPeriodFilter(value);
+    setPeriodFilter(normalized);
+    const anchorPeriod = normalized.endMonth;
+    if (anchorPeriod !== selectedPeriodKey && periodOptions.some((option) => option.periodKey === anchorPeriod)) {
+      setSelectedPeriodKey(anchorPeriod);
+      setDatasets(activeDatasetsForPeriod(datasetArchive, anchorPeriod));
+      persistLocally({
+        datasets: activeDatasetsForPeriod(datasetArchive, anchorPeriod),
+        datasetArchive,
+        selectedPeriodKey: anchorPeriod,
+        updatedAt,
+      });
     }
   }
 
@@ -1683,7 +1710,15 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
                 <h1 className="mt-1 text-3xl font-bold tracking-normal text-white">{activeReport?.label ?? "LTS REPORT"}</h1>
                 <p className="mt-2 text-sm font-medium text-violet-100/62">{activeReport ? `${activeReport.sourceLabel} | ${activeReport.periodLabel} | ${activeReport.cutoffLabel}` : "Pilih tab dan upload master terkait."}</p>
               </div>
-              <div className="relative flex items-center gap-2">
+              <div className="relative flex flex-wrap items-end gap-3">
+                <DashboardPeriodFilter
+                  className="[&>span:first-child]:text-violet-200"
+                  onChange={changeReportPeriodFilter}
+                  options={periodOptions}
+                  theme="lts"
+                  validationMessage={filteredDatasetState.validationMessage}
+                  value={periodFilter}
+                />
                 <button className={primaryButton} disabled={!activeReport || downloadState === "working"} onClick={downloadPng}>
                   {downloadState === "working" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                   PNG Report
