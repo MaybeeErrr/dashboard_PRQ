@@ -44,7 +44,6 @@ import {
   YAxis,
 } from "recharts";
 import {
-  computeLtsChecks,
   computeLtsReport,
   ltsDatasetDefinitions,
   ltsReportTabs,
@@ -260,7 +259,7 @@ function normalizePersistedDataset(datasetKey: LtsDatasetKey, value: Partial<Lts
 }
 
 function initialSeedArchive() {
-  // Seed boleh berisi lebih dari satu periode per dataset, tetapi tiap periode dihitung sendiri-sendiri (tidak dijumlahkan).
+  // Seed boleh berisi lebih dari satu periode per dataset (mis. CAPS Oktober + September).
   const archive: DatasetArchive = {};
   for (const item of ltsSeedData.datasets) {
     const datasetKey = item.datasetKey as LtsDatasetKey;
@@ -378,11 +377,9 @@ function combineDatasetsForRange(archive: DatasetArchive, filter: DashboardPerio
   const periodKeys = monthRangeKeys(normalized.startMonth, normalized.endMonth);
   const datasets: DatasetState = {};
   for (const key of Object.keys(ltsDatasetDefinitions) as LtsDatasetKey[]) {
-    // Sales, CT0, dan CAPS diperlakukan sama: hanya file pada periode yang dipilih.
-    // CAPS_MASTER di Excel = isi file NAL yang di-paste saat itu, COUNTIFS-nya tidak menyaring periode.
-    // Jadi seluruh baris pada file NAL yang diunggah sudah terhitung (termasuk jika file itu memuat
-    // beberapa bulan sekaligus). CAPS periode lain TIDAK lagi ditambahkan otomatis, karena itu yang
-    // membuat angka CAPS, Score, Rank, dan Gap membengkak setelah upload data baru.
+    // Sales, CT0, dan CAPS sama-sama hanya memakai periode yang dipilih. CAPS_MASTER di kertas kerja
+    // hanya berisi data NAL periode berjalan, jadi CAPS periode lain (mis. September) tidak boleh ikut
+    // dijumlahkan; kalau ikut, CAPS, CAPS/Sales, Rank, Score, Rank LTS CAPS, dan Gap (CAPS 27/8) membengkak.
     const entries = periodKeys.map((periodKey) => archive[key]?.[periodKey]).filter(Boolean) as LtsUploadedDataset[];
     if (entries.length === 0) continue;
     const first = entries[0];
@@ -1447,10 +1444,6 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
   }, [filteredDatasetState.datasets, reportCutoffLabel, reportPeriodLabel]);
 
   const activeReport = reports[activeTab];
-  const activeChecks = useMemo(
-    () => (activeReport ? computeLtsChecks(activeTab, filteredDatasetState.datasets, activeReport) : []),
-    [activeReport, activeTab, filteredDatasetState.datasets],
-  );
   const readyCount = Object.values(ltsDatasetDefinitions).filter((definition) => datasets[definition.datasetKey]).length;
   const periodOptions = useMemo(() => {
     const options = periodOptionsFromArchive(datasetArchive);
@@ -1768,16 +1761,6 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
                     );
                   })}
                 </div>
-                {activeChecks.length > 0 && (
-                  <section className="rounded-xl border border-amber-300/40 bg-amber-100 p-4 text-sm text-amber-950">
-                    <p className="font-semibold">Pemeriksaan data: ada yang tidak sesuai</p>
-                    <ul className="mt-1 list-disc space-y-1 pl-5">
-                      {activeChecks.map((check) => (
-                        <li key={check.message}>{check.message}</li>
-                      ))}
-                    </ul>
-                  </section>
-                )}
                 <ReportDataTable showChurnGap={screenColumns.churnGap} showRankCaps={screenColumns.rankCaps} table={activeReport.witel} />
                 <ReportDataTable showChurnGap={screenColumns.churnGap} showRankCaps={screenColumns.rankCaps} table={activeReport.hotda} />
               </>
