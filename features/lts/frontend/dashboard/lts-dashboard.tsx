@@ -314,13 +314,34 @@ function latestLtsPeriodKey(archive: DatasetArchive) {
   return [...keys].sort().at(-1) ?? "202609";
 }
 
-// Periode awal otomatis = bulan berjalan (YYYYMM) bila datanya sudah ada di arsip;
-// kalau belum ada (mis. awal bulan sebelum master diupload), pakai periode terbaru yang tersedia.
+// Data seed lama yang sudah dihapus dari seed-data.ts, tapi mungkin masih tersimpan di browser/server.
+// Dikenali lewat nama file seed-nya, jadi upload manual periode yang sama tidak ikut terhapus.
+const REMOVED_SEED_FILE_NAMES = new Set(["LTS_WITEL__HOTDA21.xlsx (CAPS_MASTER September)"]);
+
+function pruneRemovedSeedData(archive: DatasetArchive) {
+  const output: DatasetArchive = {};
+  for (const key of Object.keys(ltsDatasetDefinitions) as LtsDatasetKey[]) {
+    const entries = Object.entries(archive[key] ?? {}).filter(([, dataset]) => !REMOVED_SEED_FILE_NAMES.has(dataset.fileName));
+    if (entries.length > 0) output[key] = Object.fromEntries(entries);
+  }
+  return output;
+}
+
+// Periode "lengkap" = Sales, CT0, dan CAPS sudah tersedia untuk periode itu.
+function completePeriodKeys(archive: DatasetArchive) {
+  const keys = new Set<string>();
+  for (const datasetArchive of Object.values(archive)) Object.keys(datasetArchive ?? {}).forEach((periodKey) => keys.add(periodKey));
+  return [...keys].filter((periodKey) => (Object.keys(ltsDatasetDefinitions) as LtsDatasetKey[]).every((key) => Boolean(archive[key]?.[periodKey])));
+}
+
+// Periode awal otomatis = bulan berjalan (YYYYMM) bila datanya lengkap; kalau belum (mis. awal bulan
+// sebelum master diupload), pakai periode lengkap terbaru, lalu periode terbaru apa pun sebagai cadangan.
 function defaultLtsPeriodKey(archive: DatasetArchive) {
   const now = new Date();
   const currentKey = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const hasCurrent = Object.values(archive).some((datasetArchive) => Boolean(datasetArchive?.[currentKey]));
-  return hasCurrent ? currentKey : latestLtsPeriodKey(archive);
+  const complete = completePeriodKeys(archive).sort();
+  if (complete.includes(currentKey)) return currentKey;
+  return complete.at(-1) ?? latestLtsPeriodKey(archive);
 }
 
 function periodOptionsFromArchive(archive: DatasetArchive) {
@@ -1455,9 +1476,15 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
   const activeReport = reports[activeTab];
   const readyCount = Object.values(ltsDatasetDefinitions).filter((definition) => datasets[definition.datasetKey]).length;
   const periodOptions = useMemo(() => {
+    // Hanya bulan yang Sales + CT0 + CAPS-nya lengkap. Periode yang sedang dipilih tetap ikut tampil
+    // (mis. saat master baru baru diupload sebagian) supaya dropdown tidak kosong/tidak cocok.
     const options = periodOptionsFromArchive(datasetArchive);
-    return options.length > 0 ? options : [{ label: periodLabelFromLtsPeriodKey(selectedPeriodKey), periodKey: selectedPeriodKey }];
-  }, [datasetArchive, selectedPeriodKey]);
+    const complete = new Set(completePeriodKeys(datasetArchive));
+    const keep = new Set([selectedPeriodKey, periodFilter.startMonth, periodFilter.endMonth]);
+    const visible = options.filter((option) => complete.has(option.periodKey) || keep.has(option.periodKey));
+    const result = visible.length > 0 ? visible : options;
+    return result.length > 0 ? result : [{ label: periodLabelFromLtsPeriodKey(selectedPeriodKey), periodKey: selectedPeriodKey }];
+  }, [datasetArchive, selectedPeriodKey, periodFilter.startMonth, periodFilter.endMonth]);
 
   const syncState = useCallback((state: DashboardPersistedState, successStatus: string) => {
     persistLocally(state);
@@ -1475,7 +1502,7 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
     let currentUpdatedAt: string | null = null;
 
     if (stored) {
-      const storedArchive = stored.datasetArchive ?? archiveFromDatasets(stored.datasets);
+      const storedArchive = pruneRemovedSeedData(stored.datasetArchive ?? archiveFromDatasets(stored.datasets));
       const nextArchive = shouldRefreshSeed ? mergeDatasetArchives(storedArchive, seedArchive) : mergeDatasetArchives(seedArchive, storedArchive);
       const nextPeriodKey = defaultLtsPeriodKey(nextArchive);
       currentArchive = nextArchive;
@@ -1508,8 +1535,8 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
       .then(({ configured, state }) => {
         if (state) {
           setDatasetArchive((currentArchive) => {
-            const serverArchive = state.datasetArchive ?? archiveFromDatasets(state.datasets);
-            const mergedArchive = shouldRefreshSeed ? mergeDatasetArchives(serverArchive, currentArchive) : mergeDatasetArchives(currentArchive, serverArchive);
+            const serverArchive = pruneRemovedSeedData(state.datasetArchive ?? archiveFromDatasets(state.datasets));
+            const mergedArchive = pruneRemovedSeedData(shouldRefreshSeed ? mergeDatasetArchives(serverArchive, currentArchive) : mergeDatasetArchives(currentArchive, serverArchive));
             const nextPeriodKey = defaultLtsPeriodKey(mergedArchive);
             setSelectedPeriodKey(nextPeriodKey);
             setPeriodFilter(defaultPeriodFilter(nextPeriodKey));
