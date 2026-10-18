@@ -482,11 +482,15 @@ function parsePersistedState(value: unknown): DashboardPersistedState | null {
   };
 }
 
+// Mengembalikan false bila browser menolak menyimpan (kuota penuh), supaya bisa diberi peringatan.
+// `datasets` tidak ikut disimpan lokal: isinya sama dengan salah satu periode di datasetArchive dan
+// dibangun ulang saat dibaca (parsePersistedState), jadi ruang yang dipakai separuhnya.
 function persistLocally(state: DashboardPersistedState) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, datasets: {} }));
+    return true;
   } catch {
-    // Large workbooks can exceed browser quota; server sync and current memory state still continue.
+    return false;
   }
 }
 
@@ -1416,6 +1420,8 @@ const fullAccessPermissions: DashboardPermissions = {
 export function LtsDashboard({ permissions = fullAccessPermissions }: { permissions?: DashboardPermissions }) {
   const router = useRouter();
   const [view, setView] = useState<View>("home");
+  // false sampai data tersimpan (browser) selesai dibaca, supaya angka seed lama tidak sempat tampil lalu berganti.
+  const [hydrated, setHydrated] = useState(false);
   const [datasets, setDatasets] = useState<DatasetState>(() => {
     const archive = initialSeedArchive();
     return activeDatasetsForPeriod(archive, latestLtsPeriodKey(archive));
@@ -1465,13 +1471,14 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
   const reportCutoffLabel = ltsPeriodCutoffLabel(periodFilter);
   const reports = useMemo(() => {
     const output: Partial<Record<LtsReportTabKey, LtsComputedReport>> = {};
+    if (!hydrated) return output;
     for (const tab of ltsReportTabs) {
       const dataset = filteredDatasetState.datasets[tab.datasetKey];
       if (!dataset) continue;
       output[tab.key] = { ...computeLtsReport(tab.key, filteredDatasetState.datasets), cutoffLabel: reportCutoffLabel, periodLabel: reportPeriodLabel };
     }
     return output;
-  }, [filteredDatasetState.datasets, reportCutoffLabel, reportPeriodLabel]);
+  }, [filteredDatasetState.datasets, hydrated, reportCutoffLabel, reportPeriodLabel]);
 
   const activeReport = reports[activeTab];
   const readyCount = Object.values(ltsDatasetDefinitions).filter((definition) => datasets[definition.datasetKey]).length;
@@ -1487,10 +1494,11 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
   }, [datasetArchive, selectedPeriodKey, periodFilter.startMonth, periodFilter.endMonth]);
 
   const syncState = useCallback((state: DashboardPersistedState, successStatus: string) => {
-    persistLocally(state);
+    const savedLocally = persistLocally(state);
+    const localWarning = "PERINGATAN: penyimpanan browser penuh, data tidak bertahan setelah refresh";
     void saveStateToServer(state, masterUnlockToken)
-      .then((result) => setAutoSaveStatus(result.configured ? successStatus : "Data tersimpan di browser; database server belum dikonfigurasi"))
-      .catch(() => setAutoSaveStatus("Data tersimpan di browser; sync server gagal"));
+      .then((result) => setAutoSaveStatus(!savedLocally ? localWarning : result.configured ? successStatus : "Data tersimpan di browser; database server belum dikonfigurasi"))
+      .catch(() => setAutoSaveStatus(savedLocally ? "Data tersimpan di browser; sync server gagal" : localWarning));
   }, [masterUnlockToken]);
 
   useEffect(() => {
@@ -1523,6 +1531,7 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
       setAutoSaveStatus("Data seed LTS dimuat");
     }
 
+    setHydrated(true);
     persistLocally({
       datasets: activeDatasetsForPeriod(currentArchive, currentPeriodKey),
       datasetArchive: currentArchive,
@@ -1688,7 +1697,13 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
       </header>
 
       <div className="mx-auto max-w-[1920px] px-3 py-5 sm:px-5 lg:px-6">
-        {renderView === "home" && (
+        {!hydrated && (
+          <div className={`${glassPanel} flex items-center justify-center gap-3 p-10 text-sm font-semibold text-violet-100/80`}>
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Memuat data LTS...
+          </div>
+        )}
+        {hydrated && renderView === "home" && (
           <DashboardHome
             activeTab={activeTab}
             onGoMaster={openMasterView}
@@ -1704,7 +1719,7 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
           />
         )}
 
-        {renderView === "master" && permissions.canAccessMaster && (
+        {hydrated && renderView === "master" && permissions.canAccessMaster && (
           <div className="space-y-5">
             <section className={`${glassPanel} flex flex-wrap items-end justify-between gap-4 p-5`}>
               <div>
@@ -1729,7 +1744,7 @@ export function LtsDashboard({ permissions = fullAccessPermissions }: { permissi
           </div>
         )}
 
-        {renderView === "report" && (
+        {hydrated && renderView === "report" && (
           <div className="space-y-5">
             <section className={`${glassPanel} flex flex-wrap items-end justify-between gap-4 p-5`}>
               <div>
