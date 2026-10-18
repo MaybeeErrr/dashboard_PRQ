@@ -891,24 +891,30 @@ function DashboardHome({
   const metricLabel = chartMetric === "score" ? "SCORE" : chartMetric === "ct0" ? "CT0/SALES" : "CAPS/SALES";
   const chartData = chartRows.map((row) => ({
     caps: row.caps,
-    capsRatio: Number(row.capsRatio.toFixed(2)),
+    capsRatio: row.capsRatio,
     ct0: row.ct0,
-    ct0Ratio: Number(row.ct0Ratio.toFixed(2)),
+    ct0Ratio: row.ct0Ratio,
     name: row.label.replace("YOGYA JATENG SELATAN", "YJS").replace("SEMARANG JATENG UTARA", "SJU").replace("SOLO JATENG TIMUR", "SJT"),
     sales: row.sales,
-    score: Number(row.score.toFixed(2)),
+    score: row.score,
   }));
   const trendValue = (row: LtsReportRow) => (trendMetric === "score" ? row.score : trendMetric === "ct0" ? row.ct0Ratio : row.capsRatio);
   const trendLabel = trendMetric === "score" ? "SCORE LTS" : trendMetric === "ct0" ? "CT0 / SALES" : "CAPS / SALES";
   const trendAverage = active.rows.reduce((sum, row) => sum + trendValue(row), 0) / Math.max(active.rows.length, 1);
   const trendData = active.rows.map((row) => ({
-    average: Number(trendAverage.toFixed(2)),
+    average: trendAverage,
     name: row.label.replace("YOGYA JATENG SELATAN", "YJS").replace("SEMARANG JATENG UTARA", "SJU").replace("SOLO JATENG TIMUR", "SJT"),
-    value: Number(trendValue(row).toFixed(2)),
+    value: trendValue(row),
   }));
   const heroTitle = wilayahFilter === "all-witel" || wilayahFilter === "all-hotda" ? `LTS PERFORMA ${active.label}` : `LTS PERFORMA ${active.type} ${active.label}`;
-  const validationReady = readyCount === 3 ? "VALIDASI MATCH" : `${readyCount} / 3 READY`;
-  const validationTone = readyCount === 3 ? "good" : readyCount > 0 ? "warn" : "bad";
+  // Sama seperti baris cek di sheet "Untuk manggil data": total HOTDA harus sama dengan baris YOGYA JATENG SELATAN di tabel WITEL.
+  const yjsWitel = report.witel.rows.find((row) => row.label === "YOGYA JATENG SELATAN");
+  const validationMatch = Boolean(yjsWitel) && yjsWitel!.sales === report.hotda.total.sales && yjsWitel!.ct0 === report.hotda.total.ct0 && yjsWitel!.caps === report.hotda.total.caps;
+  const validationReady = readyCount < 3 ? `${readyCount} / 3 READY` : validationMatch ? "VALIDASI MATCH" : "VALIDASI TIDAK MATCH";
+  const validationTone = readyCount < 3 ? (readyCount > 0 ? "warn" : "bad") : validationMatch ? "good" : "bad";
+  // Lebar bar dibandingkan dengan skor tertinggi di wilayah yang sama (bukan angka tetap).
+  const maxScore = Math.max(active.row.score, ...rankingRows.map((row) => row.score), 0.0001);
+  const scoreBarWidth = (score: number) => `${Math.min(Math.max((score / maxScore) * 100, 2), 100)}%`;
   const bestWitel = bestByScore(report.witel.rows);
   const bestHotda = bestByScore(report.hotda.rows);
 
@@ -1024,7 +1030,7 @@ function DashboardHome({
                       <span className="text-violet-700">{formatRatio(active.row.score)}</span>
                     </div>
                     <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-violet-100">
-                      <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-500" style={{ width: `${Math.min(active.row.score * 18, 100)}%` }} />
+                      <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-500" style={{ width: scoreBarWidth(active.row.score) }} />
                     </div>
                   </div>
                 </div>
@@ -1075,7 +1081,7 @@ function DashboardHome({
               <p className="mt-3 text-xs font-semibold uppercase text-violet-200/72">TOTAL SCORE</p>
               <p className="mt-1.5 text-4xl font-semibold tracking-normal text-white">{formatRatio(active.row.score)}</p>
               <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
-                <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-500" style={{ width: `${Math.min(active.row.score * 18, 100)}%` }} />
+                <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-500" style={{ width: scoreBarWidth(active.row.score) }} />
               </div>
               <div className="mt-4 grid grid-cols-2 gap-2.5 text-sm">
                 <div className="rounded-md border border-white/10 bg-white/[0.04] p-3">
@@ -1151,8 +1157,8 @@ function DashboardHome({
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e9d5ff" />
                 <XAxis dataKey="name" interval={0} tick={{ angle: -32, dy: 18, fontSize: 9, fontWeight: 700, textAnchor: "end" }} height={62} />
                 <YAxis yAxisId="left" tick={{ fontSize: 12 }} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} />
-                <Tooltip formatter={(value) => tooltipValue(value)} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 12 }} tickFormatter={(value) => `${Math.round(Number(value) * 100)}%`} />
+                <Tooltip formatter={(value, name) => (name === metricLabel ? formatPercent(Number(value)) : tooltipValue(value))} />
                 <Legend verticalAlign="bottom" align="center" wrapperStyle={{ bottom: 0, fontSize: 12, fontWeight: 700, paddingTop: 18 }} />
                 <Bar yAxisId="left" dataKey="sales" name="SALES" fill="#7c4ac4" radius={[4, 4, 0, 0]}>
                   <LabelList dataKey="sales" position="top" formatter={chartLabelNumber} fontSize={10} />
@@ -1186,7 +1192,7 @@ function DashboardHome({
                 <div className="min-w-0">
                   <p className="truncate font-semibold text-slate-700">{row.label}</p>
                   <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-violet-100">
-                    <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-500" style={{ width: `${Math.min(row.score * 18, 100)}%` }} />
+                    <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-amber-400 to-rose-500" style={{ width: scoreBarWidth(row.score) }} />
                   </div>
                 </div>
                 <p className="text-xs font-semibold text-violet-700">{formatRatio(row.score)}</p>
@@ -1218,8 +1224,8 @@ function DashboardHome({
             <LineChart data={trendData} margin={{ left: 0, right: 22, top: 24, bottom: 58 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e9d5ff" />
               <XAxis dataKey="name" interval={0} tick={{ angle: -32, dy: 18, fontSize: 9, fontWeight: 700, textAnchor: "end" }} height={62} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(value) => tooltipValue(value)} />
+              <YAxis tick={{ fontSize: 12 }} tickFormatter={(value) => `${Math.round(Number(value) * 100)}%`} />
+              <Tooltip formatter={(value) => formatPercent(Number(value))} />
               <Legend verticalAlign="bottom" align="center" wrapperStyle={{ bottom: 0, fontSize: 12, fontWeight: 700, paddingTop: 18 }} />
               <Line type="monotone" dataKey="value" name={trendLabel} stroke="#0f766e" strokeWidth={3} dot={{ r: 3 }} />
               <Line type="monotone" dataKey="average" name={`RATA-RATA ${active.type}`} stroke="#64748b" strokeWidth={2.4} strokeDasharray="6 5" dot={{ r: 2 }} />
